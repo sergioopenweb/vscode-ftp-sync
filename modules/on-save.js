@@ -10,8 +10,7 @@ module.exports = function(document, getFtpSync, skipOnSaveCheck) {
 
   var config = ftpconfig.getConfig();
 
-  //We don't care about generated file uploads, let's see if it's a candidate for upload anyway.
-  if (!config.uploadOnSave && !skipOnSaveCheck) return;
+  if (!skipOnSaveCheck && !ftpconfig.isUploadOnSaveEnabled(config)) return;
 
   if (isIgnored(document.uri.fsPath, config.allow, config.ignore)) return;
 

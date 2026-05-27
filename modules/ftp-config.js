@@ -14,8 +14,38 @@ module.exports = {
   getConfigDir: function() {
     return this.rootPath().fsPath + "/.vscode";
   },
-  getGeneratedDir: function() {
-    return upath.join(this.rootPath().fsPath, this.generatedFiles.path);
+  isUploadOnSaveEnabled: function(config) {
+    config = config || this.getConfig();
+    var value = config.uploadOnSave;
+    if (value === false || value === 0 || value === null) return false;
+    if (typeof value === "string") {
+      return value.trim().toLowerCase() === "true";
+    }
+    return !!value;
+  },
+  isGeneratedFilesWatchEnabled: function(config) {
+    config = config || this.getConfig();
+    var gen = config.generatedFiles;
+    if (!gen || !gen.extensionsToInclude || gen.extensionsToInclude.length === 0) {
+      return false;
+    }
+    var watchPath = gen.path;
+    return (
+      watchPath !== undefined &&
+      watchPath !== null &&
+      String(watchPath).length > 0
+    );
+  },
+  getGeneratedDir: function(config) {
+    var fullConfig = config;
+    if (!fullConfig || !fullConfig.generatedFiles) {
+      fullConfig =
+        this && this.generatedFiles ? this : module.exports.getConfig();
+    }
+    return upath.join(
+      module.exports.rootPath().fsPath,
+      fullConfig.generatedFiles.path
+    );
   },
   defaultConfig: {
     remotePath: "./",

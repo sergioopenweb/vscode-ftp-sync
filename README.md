@@ -1,5 +1,7 @@
 # FTP-Sync extension for VS Code
 
+Fork mantido pela [Openweb](https://github.com/openweb/vscode-ftp-sync), baseado no projeto original [lukasz-wronski/vscode-ftp-sync](https://github.com/lukasz-wronski/vscode-ftp-sync).
+
 This extension allows you to easily synchronise your local workspace (project files) with an FTP server. It also has several advanced features such as **automatic upload on save**.
 
 ![Demo of extension](https://i.imgur.com/W9h4pwW.gif)
@@ -30,7 +32,7 @@ Initializes a default FTP-Sync configuration file in the `.vscode` directory. Op
 - ignore - An array of escaped regular expression strings specifying paths to ignore. If a path matches any of these regular expressions then it will not be included in the sync. Default values are `"\\.git"`, `"\\.vscode"` and `".DS_Store"`.
 - generatedFiles: - Automatically upload freshly generated files. Also uploads files that are deleted. extensionsToInclude has to be set for this feature to work.
   - extensionsToInclude: [] e.g. [".js", ".css"] - Array of strings specifying what extensions to add for auto-upload. An empty array here means that generatedFiles feature is disabled. Setting it to [""] will cause it to upload files of all extensions.
-  - path: "" - This specifies the path to the directory where the files are, [e.g.] "/build", default is "" which is the root workspace directory
+  - path: "" - Directory to watch for generated output (e.g. `"dist"` or `"build"`). Must be non-empty for this feature to run; an empty path disables the watcher.
 
 ### Ftp-sync: Sync Local to Remote
 
@@ -58,10 +60,23 @@ Commits reviewed list of changes made with Sync Local to Remote or Sync Remote t
 
 - Integration with git-ftp
 
+## Desenvolvimento e testes
+
+1. `npm install`
+2. Abra esta pasta no VS Code/Cursor e pressione **F5** (*Launch Extension*) — abre uma janela com a extensão carregada.
+3. Na janela nova, abra um projeto e use **Ftp-sync: Init** para criar `.vscode/ftp-sync.json`.
+4. Para gerar um pacote instalável: `npm install -D @vscode/vsce && npm run package` → arquivo `ftp-sync-0.5.0.vsix`. Instale com *Extensions: Install from VSIX*.
+
+## Version history (fork)
+
+- 0.5.0
+  - VS Code 1.85+, Node 18+, dependências atualizadas
+  - Correção: `uploadOnSave: false` era ignorado quando `generatedFiles` vigiava o projeto inteiro
+  - Watcher de `generatedFiles` só ativa com `path` definido
+
 ### Found any bugs? Got any questions or ideas?
 
-- Rise a ticket [here](https://github.com/lukasz-wronski/vscode-ftp-sync/issues)!
-- Contact me at vscode[at]lukaszwronski.pl
+- Abra uma issue [no repositório Openweb](https://github.com/openweb/vscode-ftp-sync/issues)
 
 Please provide as much information as possible. We are dealing with diffrent ftp servers, file structures, file permissions, operating systems and it might be difficult to reproduce your error and fix it without detailed informations.
 

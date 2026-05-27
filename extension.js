@@ -6,6 +6,8 @@ global.STATUS_TIMEOUT = 3000;
 
 // this method is called when your extension is activated
 // your extension is activated the very first time the command is executed
+var fsw;
+
 function activate(context) {
   var syncHelper, currentConfig;
   var ftpConfig = require("./modules/ftp-config");
@@ -70,10 +72,10 @@ function activate(context) {
   var onSave = require("./modules/on-save");
   var onGenerate = require("./modules/on-generate");
 
-  var currentConfig = getSyncHelper().getConfig();
-  if (currentConfig.generatedFiles.extensionsToInclude.length > 0) {
+  var initialConfig = ftpConfig.getConfig();
+  if (ftpConfig.isGeneratedFilesWatchEnabled(initialConfig)) {
     fsw = vscode.workspace.createFileSystemWatcher(
-      currentConfig.getGeneratedDir() + "/**"
+      ftpConfig.getGeneratedDir(initialConfig) + "/**"
     );
     fsw.onDidChange(function(ev) {
       //an attempt to normalize onDidChange with onDidSaveTextDocument.
@@ -107,6 +109,8 @@ function activate(context) {
 exports.activate = activate;
 
 function deactivate() {
-  fsw.dispose();
+  if (fsw) {
+    fsw.dispose();
+  }
 }
 exports.deactivate = deactivate;
