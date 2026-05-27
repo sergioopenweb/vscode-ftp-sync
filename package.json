@@ -10,12 +10,12 @@
     "node": ">=18.0.0"
   },
   "bugs": {
-    "url": "https://github.com/openweb/vscode-ftp-sync/issues"
+    "url": "https://github.com/sergioopenweb/vscode-ftp-sync/issues"
   },
-  "homepage": "https://github.com/openweb/vscode-ftp-sync#readme",
+  "homepage": "https://github.com/sergioopenweb/vscode-ftp-sync#readme",
   "repository": {
     "type": "git",
-    "url": "https://github.com/openweb/vscode-ftp-sync.git"
+    "url": "https://github.com/sergioopenweb/vscode-ftp-sync.git"
   },
   "scripts": {
     "package": "vsce package --dependencies",

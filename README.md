@@ -1,6 +1,6 @@
 # FTP-Sync extension for VS Code
 
-Fork mantido pela [Openweb](https://github.com/openweb/vscode-ftp-sync), baseado no projeto original [lukasz-wronski/vscode-ftp-sync](https://github.com/lukasz-wronski/vscode-ftp-sync).
+Fork mantido por [sergioopenweb](https://github.com/sergioopenweb/vscode-ftp-sync), baseado no projeto original [lukasz-wronski/vscode-ftp-sync](https://github.com/lukasz-wronski/vscode-ftp-sync).
 
 This extension allows you to easily synchronise your local workspace (project files) with an FTP server. It also has several advanced features such as **automatic upload on save**.
 
@@ -76,7 +76,7 @@ Commits reviewed list of changes made with Sync Local to Remote or Sync Remote t
 
 ### Found any bugs? Got any questions or ideas?
 
-- Abra uma issue [no repositório Openweb](https://github.com/openweb/vscode-ftp-sync/issues)
+- Abra uma issue [no repositório do fork](https://github.com/sergioopenweb/vscode-ftp-sync/issues)
 
 Please provide as much information as possible. We are dealing with diffrent ftp servers, file structures, file permissions, operating systems and it might be difficult to reproduce your error and fix it without detailed informations.
 
