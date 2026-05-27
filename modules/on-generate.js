@@ -5,8 +5,12 @@ var path = require("path");
 var isIgnored = require("./is-ignored");
 var upath = require("upath");
 
+var formatError = require("./connection-errors").formatConnectionError;
+
 module.exports = function(document, getFtpSync, skipOnSaveCheck) {
   if (document.uri.fsPath.indexOf(ftpconfig.rootPath().fsPath) < 0) return;
+
+  if (!ftpconfig.validateConfig({ silent: true })) return;
 
   var config = ftpconfig.getConfig();
 
@@ -48,7 +52,7 @@ module.exports = function(document, getFtpSync, skipOnSaveCheck) {
       uploadingStatus.dispose();
       if (err)
         vscode.window.showErrorMessage(
-          "Ftp-sync: Uploading " + fileName + " failed: " + err
+          "Ftp-sync: Uploading " + fileName + " failed: " + formatError(err)
         );
       else
         vscode.window.setStatusBarMessage(

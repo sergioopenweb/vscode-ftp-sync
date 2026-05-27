@@ -10,6 +10,9 @@ var FtpWrapper = require("./ftp-wrapper");
 var SftpWrapper = require("./sftp-wrapper");
 var ScpWrapper = require("./scp-wrapper");
 var vscode = require("vscode");
+var formatError = require("./connection-errors").formatConnectionError;
+var transferKeepalive = require("./transfer-keepalive");
+var syncCancel = require("./sync-cancel");
 
 var ftp;
 
@@ -42,6 +45,10 @@ var listRemoteFiles = function(
   originalRemotePath,
   options
 ) {
+  if (syncCancel.callbackIfCancelled(callback)) {
+    return;
+  }
+
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
   if (!originalRemotePath) {
@@ -59,13 +66,22 @@ var listRemoteFiles = function(
   // Add a new open request
   openListRemoteFilesRequests += 1;
 
+  transferKeepalive.ensure(ftp, ftpConfig, function() {
   ftp.list(remotePath, function(err, remoteFiles) {
     // The request is finish so remove it
     openListRemoteFilesRequests -= 1;
 
     if (err) {
+      if (syncCancel.isRequested()) {
+        callback(syncCancel.CANCELLED_MSG);
+        return;
+      }
       if (err.code == 450) callback(null, []);
-      else callback(err);
+      else callback(syncCancel.normalizeError(err, formatError));
+      return;
+    }
+
+    if (syncCancel.callbackIfCancelled(callback)) {
       return;
     }
 
@@ -121,7 +137,10 @@ var listRemoteFiles = function(
         subPath,
         function(err, subResult) {
           if (err) {
-            callback(err);
+            callback(syncCancel.normalizeError(err, formatError));
+            return;
+          }
+          if (syncCancel.callbackIfCancelled(callback)) {
             return;
           }
           result = _.union(result, subResult);
@@ -136,15 +155,29 @@ var listRemoteFiles = function(
     if (subdirs.length == 0) finish();
     else listNextSubdir();
   });
+  });
 };
 // list remote files, deep = 1
 const listOneDeepRemoteFiles = function(remotePath, callback) {
+  if (syncCancel.callbackIfCancelled(callback)) {
+    return;
+  }
+
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
+  transferKeepalive.ensure(ftp, ftpConfig, function() {
   ftp.list(remotePath, function(err, remoteFiles) {
     if (err) {
+      if (syncCancel.isRequested()) {
+        callback(syncCancel.CANCELLED_MSG);
+        return;
+      }
       if (err.code == 450) callback(null, []);
-      else callback(err);
+      else callback(syncCancel.normalizeError(err, formatError));
+      return;
+    }
+
+    if (syncCancel.callbackIfCancelled(callback)) {
       return;
     }
 
@@ -195,12 +228,17 @@ const listOneDeepRemoteFiles = function(remotePath, callback) {
     };
     finish();
   });
+  });
 };
 // the entry of list request
 const ListRemoteFilesByPath = function(remotePath, callback) {
+  syncCancel.reset();
   connect(function(err) {
     if (err) {
-      callback(err);
+      callback(syncCancel.normalizeError(err, formatError));
+      return;
+    }
+    if (syncCancel.callbackIfCancelled(callback)) {
       return;
     }
     listOneDeepRemoteFiles(remotePath, callback);
@@ -229,6 +267,10 @@ const deleteRemoteFile = function(remoteFilePath) {
 };
 //add options
 var listLocalFiles = function(localPath, rootPath, callback, options) {
+  if (syncCancel.callbackIfCancelled(callback)) {
+    return;
+  }
+
   output(getCurrentTime() + " > [ftp-sync] listLocalFiles:" + localPath);
 
   var files = [];
@@ -283,6 +325,9 @@ var listLocalFiles = function(localPath, rootPath, callback, options) {
     fswalk.walk(
       localPath,
       function(basedir, filename, stat, next) {
+        if (syncCancel.isRequested()) {
+          return callback(syncCancel.CANCELLED_MSG, files);
+        }
         var filePath = path.join(basedir, filename);
         //when listing localFiles by onPrepareLocalProgress, ignore localfile
         if (isIgnored(filePath, ftpConfig.allow, ftpConfig.ignore))
@@ -300,7 +345,11 @@ var listLocalFiles = function(localPath, rootPath, callback, options) {
         next();
       },
       function(err) {
-        callback(err, files);
+        if (syncCancel.isRequested()) {
+          callback(syncCancel.CANCELLED_MSG, files);
+        } else {
+          callback(err, files);
+        }
       }
     );
   }
@@ -416,7 +465,9 @@ var connect = function(callback) {
       else if (ftpConfig.protocol == "sftp") ftp.goSftp(callback);
       else if (ftpConfig.passive) ftp.pasv(callback);
     });
-    ftp.onerror(callback);
+    ftp.onerror(function(err) {
+      callback(formatError(err));
+    });
     ftp.onclose(function(err) {
       output(getCurrentTime() + " > [ftp-sync] connection closed");
       connected = false;
@@ -425,19 +476,22 @@ var connect = function(callback) {
 };
 
 var prepareSync = function(options, callback) {
+  syncCancel.reset();
   connect(function(err) {
-    if (err) callback(err);
-    else
+    if (err) callback(syncCancel.normalizeError(err, formatError));
+    else if (syncCancel.callbackIfCancelled(callback)) {
+    } else
       listRemoteFiles(
         options.remotePath,
         function(err, remoteFiles) {
-          if (err) callback(err);
-          else
+          if (err) callback(syncCancel.normalizeError(err, formatError));
+          else if (syncCancel.callbackIfCancelled(callback)) {
+          } else
             listLocalFiles(
               options.localPath,
               options.rootPath,
               function(err, localFiles) {
-                if (err) callback(err);
+                if (err) callback(syncCancel.normalizeError(err, formatError));
                 else
                   prepareSyncObject(remoteFiles, localFiles, options, callback);
               },
@@ -451,6 +505,10 @@ var prepareSync = function(options, callback) {
 };
 
 var executeSyncLocal = function(sync, options, callback) {
+  if (syncCancel.callbackIfCancelled(callback)) {
+    return;
+  }
+
   if (onSyncProgress != null)
     onSyncProgress(sync.startTotal - totalOperations(sync), sync.startTotal);
 
@@ -510,6 +568,10 @@ var executeSyncLocal = function(sync, options, callback) {
 };
 
 var executeSyncRemote = function(sync, options, callback) {
+  if (syncCancel.callbackIfCancelled(callback)) {
+    return;
+  }
+
   if (onSyncProgress != null)
     onSyncProgress(sync.startTotal - totalOperations(sync), sync.startTotal);
 
@@ -521,7 +583,10 @@ var executeSyncRemote = function(sync, options, callback) {
 
     ftp.put(local, remote, function(err) {
       if (err) callback(err);
-      else executeSyncRemote(sync, options, callback);
+      else {
+        transferKeepalive.markActivity();
+        executeSyncRemote(sync, options, callback);
+      }
     });
   };
 
@@ -533,6 +598,7 @@ var executeSyncRemote = function(sync, options, callback) {
       getCurrentTime() + " > [ftp-sync] syncRemote createDir: " + dirToAdd
     );
 
+    transferKeepalive.ensure(ftp, ftpConfig, function() {
     ftp.mkdir(
       remotePath,
       function(err) {
@@ -541,6 +607,7 @@ var executeSyncRemote = function(sync, options, callback) {
       },
       true
     );
+    });
   } else if (sync.filesToAdd.length > 0) {
     var fileToAdd = sync.filesToAdd.shift();
     replaceFile(fileToAdd);
@@ -577,6 +644,7 @@ var executeSyncRemote = function(sync, options, callback) {
 };
 
 var ensureDirExists = function(remoteDir, callback) {
+  transferKeepalive.ensure(ftp, ftpConfig, function() {
   ftp.list(path.posix.join(remoteDir, ".."), function(err, list) {
     if (err) {
       ensureDirExists(path.posix.join(remoteDir, ".."), function() {
@@ -597,9 +665,11 @@ var ensureDirExists = function(remoteDir, callback) {
       );
     }
   });
+  });
 };
 
 var uploadFile = function(localPath, rootPath, callback) {
+  syncCancel.reset();
   output(
     getCurrentTime() +
       " > [sync-helper] uploading: " +
@@ -610,18 +680,25 @@ var uploadFile = function(localPath, rootPath, callback) {
   );
   var remoteDir = upath.toUnix(path.dirname(remotePath));
   connect(function(err) {
+    if (syncCancel.callbackIfCancelled(callback)) {
+      return;
+    }
     if (err) {
-      callback(err);
+      callback(syncCancel.normalizeError(err, formatError));
       return;
     }
     var putFile = function() {
+      if (syncCancel.callbackIfCancelled(callback)) {
+        return;
+      }
       ftp.put(localPath, remotePath, function(err) {
-        callback(err);
+        if (!err) transferKeepalive.markActivity();
+        callback(syncCancel.normalizeError(err, formatError));
       });
     };
     if (remoteDir != ".")
       ensureDirExists(remoteDir, function(err) {
-        if (err) callback(err);
+        if (err) callback(syncCancel.normalizeError(err, formatError));
         else putFile();
       });
     else putFile();
@@ -629,6 +706,7 @@ var uploadFile = function(localPath, rootPath, callback) {
 };
 
 var downloadFile = function(localPath, rootPath, callback) {
+  syncCancel.reset();
   output(
     getCurrentTime() +
       " > [sync-helper] downloading: " +
@@ -639,15 +717,25 @@ var downloadFile = function(localPath, rootPath, callback) {
   );
   var remoteDir = upath.toUnix(path.dirname(remotePath));
   connect(function(err) {
-    if (err) callback(err);
+    if (syncCancel.callbackIfCancelled(callback)) {
+      return;
+    }
+    if (err) {
+      callback(syncCancel.normalizeError(err, formatError));
+      return;
+    }
     var getFile = function() {
+      if (syncCancel.callbackIfCancelled(callback)) {
+        return;
+      }
       ftp.get(remotePath, localPath, function(err) {
-        callback(err);
+        if (!err) transferKeepalive.markActivity();
+        callback(syncCancel.normalizeError(err, formatError));
       });
     };
     if (remoteDir != ".")
       ensureDirExists(remoteDir, function(err) {
-        if (err) callback(err);
+        if (err) callback(syncCancel.normalizeError(err, formatError));
         else getFile();
       });
     else getFile();
@@ -655,12 +743,17 @@ var downloadFile = function(localPath, rootPath, callback) {
 };
 
 var executeSync = function(sync, options, callback) {
+  syncCancel.reset();
   output(getCurrentTime() + " > [ftp-sync] sync starting");
   sync.startTotal = totalOperations(sync);
   connect(function(err) {
-    if (err) callback(err);
-    else if (options.upload) executeSyncRemote(sync, options, callback);
-    else executeSyncLocal(sync, options, callback);
+    if (err) callback(syncCancel.normalizeError(err, formatError));
+    else if (syncCancel.callbackIfCancelled(callback)) {
+    } else if (options.upload) {
+      executeSyncRemote(sync, options, callback);
+    } else {
+      executeSyncLocal(sync, options, callback);
+    }
   });
 };
 
@@ -686,8 +779,31 @@ var helper = {
   totalOperations: totalOperations,
   uploadFile: uploadFile,
   downloadFile: downloadFile,
+  cancel: function() {
+    syncCancel.request();
+    openListRemoteFilesRequests = 0;
+    output(getCurrentTime() + " > [ftp-sync] cancel requested");
+    connected = false;
+    if (!ftp) {
+      return;
+    }
+    try {
+      if (ftp.abort) {
+        ftp.abort(true, function() {});
+      }
+    } catch (e) {}
+    try {
+      if (ftp.end) {
+        ftp.end();
+      }
+    } catch (e) {}
+  },
+  isCancelledError: syncCancel.isCancelledError,
   disconnect: function() {
-    ftp.end();
+    connected = false;
+    if (ftp && ftp.end) {
+      ftp.end();
+    }
   },
   onPrepareRemoteProgress: function(callback) {
     onPrepareRemoteProgress = callback;

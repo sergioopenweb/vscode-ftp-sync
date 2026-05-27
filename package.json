@@ -2,7 +2,7 @@
   "name": "ftp-sync",
   "displayName": "FTP-Sync",
   "description": "Auto sync your work to remote FTP/SFTP server",
-  "version": "0.5.0",
+  "version": "0.5.4",
   "publisher": "openweb",
   "license": "MIT",
   "engines": {
@@ -34,6 +34,9 @@
     "onCommand:extension.ftpsyncuploadselected",
     "onCommand:extension.ftpsyncdownloadselected",
     "onCommand:extension.ftpsynclistselected",
+    "onCommand:extension.ftpsyncuploadfolder",
+    "onCommand:extension.ftpsyncdownloadfolder",
+    "onCommand:extension.ftpsynccancel",
     "workspaceContains:.vscode/ftp-sync.json"
   ],
   "main": "./extension.js",
@@ -70,6 +73,18 @@
       {
         "command": "extension.ftpsynclistselected",
         "title": "Ftp-sync: Browse Remote..."
+      },
+      {
+        "command": "extension.ftpsyncuploadfolder",
+        "title": "Ftp-sync: Sync Folder to Remote"
+      },
+      {
+        "command": "extension.ftpsyncdownloadfolder",
+        "title": "Ftp-sync: Sync Folder from Remote"
+      },
+      {
+        "command": "extension.ftpsynccancel",
+        "title": "Ftp-sync: Cancel"
       }
     ],
     "menus": {
@@ -88,6 +103,16 @@
           "command": "extension.ftpsynclistselected",
           "group": "extension",
           "when": "!explorerResourceIsFolder"
+        },
+        {
+          "command": "extension.ftpsyncuploadfolder",
+          "group": "extension",
+          "when": "explorerResourceIsFolder"
+        },
+        {
+          "command": "extension.ftpsyncdownloadfolder",
+          "group": "extension",
+          "when": "explorerResourceIsFolder"
         }
       ]
     }

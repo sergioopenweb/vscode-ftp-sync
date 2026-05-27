@@ -26,7 +26,8 @@ module.exports = function () {
 			password: ftpConfig.password,
 			privateKey: privateKey,
 			passphrase: ftpConfig.passphrase,
-			agent: ftpConfig.agent
+			agent: ftpConfig.agent,
+			readyTimeout: ftpConfig.readyTimeout
 		};
 
 		client.defaults(config);

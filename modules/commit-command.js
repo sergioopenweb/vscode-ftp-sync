@@ -1,9 +1,12 @@
 /* global STATUS_TIMEOUT */
 var vscode = require('vscode');
 var helper = require('./command-helper');
-
+var ftpconfig = require('./ftp-config');
 
 module.exports = function(getSyncHelper) {
+	if (!ftpconfig.validateConfig()) {
+		return;
+	}
 
 	if(!vscode.window.activeTextEditor || 
 	   !vscode.window.activeTextEditor.document) {

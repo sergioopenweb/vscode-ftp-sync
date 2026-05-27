@@ -69,6 +69,38 @@ function activate(context) {
       require("./modules/list-command")(fileUrl, getSyncHelper);
     }
   );
+  var uploadFolderCommand = vscode.commands.registerCommand(
+    "extension.ftpsyncuploadfolder",
+    function(fileUrl) {
+      var rel = ftpConfig.getRelativePathFromResource(fileUrl);
+      if (rel === null) {
+        vscode.window.showErrorMessage(
+          "Ftp-sync: A pasta selecionada não faz parte do workspace."
+        );
+        return;
+      }
+      require("./modules/sync-command")(true, getSyncHelper, rel);
+    }
+  );
+  var downloadFolderCommand = vscode.commands.registerCommand(
+    "extension.ftpsyncdownloadfolder",
+    function(fileUrl) {
+      var rel = ftpConfig.getRelativePathFromResource(fileUrl);
+      if (rel === null) {
+        vscode.window.showErrorMessage(
+          "Ftp-sync: A pasta selecionada não faz parte do workspace."
+        );
+        return;
+      }
+      require("./modules/sync-command")(false, getSyncHelper, rel);
+    }
+  );
+  var cancelCommand = vscode.commands.registerCommand(
+    "extension.ftpsynccancel",
+    function() {
+      require("./modules/cancel-command")(getSyncHelper);
+    }
+  );
   var onSave = require("./modules/on-save");
   var onGenerate = require("./modules/on-generate");
 
@@ -104,6 +136,9 @@ function activate(context) {
   context.subscriptions.push(uploadcurrentCommand);
   context.subscriptions.push(downloadcurrentCommand);
   context.subscriptions.push(listcurrentCommand);
+  context.subscriptions.push(uploadFolderCommand);
+  context.subscriptions.push(downloadFolderCommand);
+  context.subscriptions.push(cancelCommand);
 }
 
 exports.activate = activate;
