@@ -50,20 +50,35 @@ module.exports = {
   getTransferKeepaliveInterval: function(config) {
     config = config || this.getConfig();
     if (!config) {
-      return 45000;
+      return 30000;
     }
     var value = config.transferKeepaliveInterval;
     if (value === 0 || value === false) {
       return 0;
     }
     if (value === undefined || value === null || value === "") {
-      return 45000;
+      return 30000;
     }
     var ms = Number(value);
     if (isNaN(ms) || ms < 0) {
-      return 45000;
+      return 30000;
     }
     return ms;
+  },
+  getMaxConnections: function(config) {
+    config = config || this.getConfig();
+    if (!config) {
+      return 1;
+    }
+    var value = config.maxConnections;
+    if (value === undefined || value === null || value === "") {
+      return 1;
+    }
+    var n = parseInt(value, 10);
+    if (isNaN(n) || n < 1) {
+      return 1;
+    }
+    return n;
   },
   getTimeoutMs: function(config) {
     config = config || this.getConfig();
@@ -98,7 +113,8 @@ module.exports = {
     uploadOnSave: false,
     passive: false,
     timeout: 120000,
-    transferKeepaliveInterval: 45000,
+    transferKeepaliveInterval: 30000,
+    maxConnections: 1,
     debug: false,
     privateKeyPath: null,
     passphrase: null,
@@ -165,6 +181,17 @@ module.exports = {
     var protocol = (config.protocol || "ftp").toLowerCase();
     if (["ftp", "sftp", "scp"].indexOf(protocol) < 0) {
       errors.push('"protocol" deve ser "ftp", "sftp" ou "scp".');
+    }
+
+    if (
+      config.maxConnections !== undefined &&
+      config.maxConnections !== null &&
+      config.maxConnections !== ""
+    ) {
+      var maxConn = parseInt(config.maxConnections, 10);
+      if (isNaN(maxConn) || maxConn < 1) {
+        errors.push('"maxConnections" deve ser um inteiro maior ou igual a 1.');
+      }
     }
 
     if (
@@ -257,17 +284,23 @@ module.exports = {
       keepalive: timeouts.keepalive,
       readyTimeout: timeouts.readyTimeout,
       transferKeepaliveInterval: this.getTransferKeepaliveInterval(config),
+      maxConnections: this.getMaxConnections(config),
       rootPath: this.rootPath
     };
   },
   connectionChanged: function(oldConfig) {
     var config = this.getSyncConfig();
+    if (!oldConfig || !config) {
+      return true;
+    }
     return (
       config.host != oldConfig.host ||
       config.port != oldConfig.port ||
       config.user != oldConfig.user ||
       config.password != oldConfig.password ||
-      config.timeout != oldConfig.timeout
+      config.timeout != oldConfig.timeout ||
+      config.maxConnections != oldConfig.maxConnections ||
+      config.protocol != oldConfig.protocol
     );
   }
 };
