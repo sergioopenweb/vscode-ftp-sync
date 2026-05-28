@@ -2,7 +2,6 @@ var fs = require("fs");
 var path = require("path");
 var upath = require("upath");
 var mkdirp = require("mkdirp");
-var fswalk = require("fs-walk");
 var _ = require("lodash");
 var isIgnored = require("./is-ignored");
 var output = require("./output");
@@ -96,8 +95,6 @@ var listRemoteFiles = function(
     var result = [];
     var subdirs = [];
 
-    if (remoteFiles.length == 0) callback(null, result);
-
     remoteFiles.forEach(function(fileInfo) {
       //when listing remoteFiles by onPrepareRemoteProgress, ignore remoteFiles
       if (
@@ -157,7 +154,7 @@ var listRemoteFiles = function(
       );
     };
 
-    if (subdirs.length == 0) finish();
+    if (remoteFiles.length == 0 || subdirs.length == 0) finish();
     else listNextSubdir();
   });
 };
@@ -267,6 +264,65 @@ const deleteRemoteFile = function(remoteFilePath) {
     });
   });
 };
+var walkLocalDir = function(dir, localPath, files, done) {
+  if (isCancelled()) {
+    done(makeCancelledError());
+    return;
+  }
+  fs.readdir(dir, function(err, names) {
+    if (err) {
+      done(err);
+      return;
+    }
+    if (!names || names.length === 0) {
+      done(null);
+      return;
+    }
+
+    var pending = names.length;
+    var hadError = null;
+
+    var next = function(err) {
+      if (err && !hadError) hadError = err;
+      pending -= 1;
+      if (pending === 0) done(hadError);
+    };
+
+    names.forEach(function(name) {
+      var fullPath = path.join(dir, name);
+      if (isIgnored(fullPath, ftpConfig.allow, ftpConfig.ignore)) {
+        next(null);
+        return;
+      }
+
+      fs.stat(fullPath, function(statErr, stat) {
+        if (isCancelled()) {
+          next(makeCancelledError());
+          return;
+        }
+        if (statErr) {
+          next(statErr);
+          return;
+        }
+
+        var relPath = path.relative(localPath, fullPath);
+        relPath = upath.toUnix(relPath);
+        if (relPath[0] == "/") relPath = relPath.substr(1);
+
+        if (onPrepareLocalProgress) onPrepareLocalProgress(relPath);
+        files.push({
+          name: relPath,
+          size: stat.size,
+          isDir: stat.isDirectory()
+        });
+
+        if (stat.isDirectory()) walkLocalDir(fullPath, localPath, files, next);
+        else next(null);
+      });
+    });
+  });
+};
+
 //add options
 var listLocalFiles = function(localPath, rootPath, callback, options) {
   if (isCancelled()) {
@@ -277,148 +333,119 @@ var listLocalFiles = function(localPath, rootPath, callback, options) {
 
   var files = [];
 
-  // if (localPath != rootPath) {
-  //   fswalk.dirs(
-  //     localPath,
-  //     function(basedir, filename, stat, next) {
-  //       var dirPath = path.join(basedir, filename);
-  //       if (isIgnored(dirPath, ftpConfig.allow, ftpConfig.ignore))
-  //         return next();
-  //       dirPath = dirPath.replace(localPath, "");
-  //       dirPath = upath.toUnix(dirPath);
-  //       if (dirPath[0] == "/") dirPath = dirPath.substr(1);
-  //       if (onPrepareLocalProgress) onPrepareLocalProgress(dirPath);
-  //       files.push({
-  //         name: dirPath,
-  //         size: stat.size,
-  //         isDir: stat.isDirectory()
-  //       });
-  //       next();
-  //     },
-  //     function(err) {
-  //       callback(err, files);
-  //     }
-  //   );
-  //   fswalk.files(
-  //     localPath,
-  //     function(basedir, filename, stat, next) {
-  //       var filePath = path.join(basedir, filename);
-  //       //when listing localFiles by onPrepareLocalProgress, ignore localfile
-  //       if (isIgnored(filePath, ftpConfig.allow, ftpConfig.ignore))
-  //         return next();
-  //       filePath = filePath.replace(localPath, "");
-  //       filePath = upath.toUnix(filePath);
-  //       if (filePath[0] == "/") filePath = filePath.substr(1);
-
-  //       if (onPrepareLocalProgress) onPrepareLocalProgress(filePath);
-  //       files.push({
-  //         name: filePath,
-  //         size: stat.size,
-  //         isDir: stat.isDirectory()
-  //       });
-  //       next();
-  //     },
-  //     function(err) {
-  //       callback(err, files);
-  //     }
-  //   );
-  // }
-  // if (localPath === rootPath) {
-    fswalk.walk(
-      localPath,
-      function(basedir, filename, stat, next) {
-        if (isCancelled()) {
-          callback(makeCancelledError());
-          return;
-        }
-        var filePath = path.join(basedir, filename);
-        //when listing localFiles by onPrepareLocalProgress, ignore localfile
-        if (isIgnored(filePath, ftpConfig.allow, ftpConfig.ignore))
-          return next();
-        filePath = filePath.replace(localPath, "");
-        filePath = upath.toUnix(filePath);
-        if (filePath[0] == "/") filePath = filePath.substr(1);
-
-        if (onPrepareLocalProgress) onPrepareLocalProgress(filePath);
-        files.push({
-          name: filePath,
-          size: stat.size,
-          isDir: stat.isDirectory()
-        });
-        next();
-      },
-      function(err) {
-        if (isCancelled()) {
-          callback(makeCancelledError());
-          return;
-        }
-        callback(err, files);
-      }
-    );
-  }
-//};
+  walkLocalDir(localPath, localPath, files, function(err) {
+    if (isCancelled()) {
+      callback(makeCancelledError());
+      return;
+    }
+    if (err) callback(err);
+    else {
+      output(
+        getCurrentTime() +
+          " > [ftp-sync] listLocalFiles done: " +
+          files.length +
+          " entries"
+      );
+      callback(null, files);
+    }
+  });
+};
 
 var prepareSyncObject = function(remoteFiles, localFiles, options, callback) {
-  var from = options.upload ? localFiles : remoteFiles;
-  var to = options.upload ? remoteFiles : localFiles;
+  output(
+    getCurrentTime() +
+      " > [ftp-sync] comparing " +
+      remoteFiles.length +
+      " remote and " +
+      localFiles.length +
+      " local entries..."
+  );
 
-  var skipIgnores = function(file) {
-    return isIgnored(
-      path.join(options.remotePath, file.name),
-      ftpConfig.allow,
-      ftpConfig.ignore
-    );
-  };
+  setImmediate(function() {
+    if (isCancelled()) {
+      callback(makeCancelledError());
+      return;
+    }
 
-  _.remove(from, skipIgnores);
-  _.remove(to, skipIgnores);
+    try {
+      var from = options.upload ? localFiles : remoteFiles;
+      var to = options.upload ? remoteFiles : localFiles;
 
-  var filesToUpdate = [];
-  var filesToAdd = [];
-  var dirsToAdd = [];
-  var filesToRemove = [];
-  var dirsToRemove = [];
+      var skipIgnores = function(file) {
+        return isIgnored(
+          path.join(options.remotePath, file.name),
+          ftpConfig.allow,
+          ftpConfig.ignore
+        );
+      };
 
-  if (options.mode == "force")
-    from.forEach(function(fromFile) {
-      var toEquivalent = to.find(function(toFile) {
-        return toFile.name == fromFile.name;
+      _.remove(from, skipIgnores);
+      _.remove(to, skipIgnores);
+
+      var toByName = {};
+      to.forEach(function(toFile) {
+        toByName[toFile.name] = toFile;
       });
-      if (toEquivalent && !fromFile.isDir) filesToUpdate.push(fromFile.name);
-      if (!toEquivalent) {
-        if (fromFile.isDir) dirsToAdd.push(fromFile.name);
-        else filesToAdd.push(fromFile.name);
-      }
-    });
-  else
-    from.forEach(function(fromFile) {
-      var toEquivalent = to.find(function(toFile) {
-        return toFile.name == fromFile.name;
-      });
-      if (!toEquivalent && !fromFile.isDir) filesToAdd.push(fromFile.name);
-      if (!toEquivalent && fromFile.isDir) dirsToAdd.push(fromFile.name);
-      if (toEquivalent) toEquivalent.wasOnFrom = true;
-      if (toEquivalent && toEquivalent.size != fromFile.size && !fromFile.isDir)
-        filesToUpdate.push(fromFile.name);
-    });
 
-  if (options.mode == "full")
-    to.filter(function(toFile) {
-      return !toFile.wasOnFrom;
-    }).forEach(function(toFile) {
-      if (toFile.isDir) dirsToRemove.push(toFile.name);
-      else filesToRemove.push(toFile.name);
-    });
+      var filesToUpdate = [];
+      var filesToAdd = [];
+      var dirsToAdd = [];
+      var filesToRemove = [];
+      var dirsToRemove = [];
 
-  callback(null, {
-    _readMe:
-      "Review list of sync operations, then use Ftp-sync: Commit command to accept changes. Note that if you're not in your root directory then all the parent directories will also be uploaded",
-    _warning: "This file should not be saved, reopened review file won't work!",
-    filesToUpdate: filesToUpdate,
-    filesToAdd: filesToAdd,
-    dirsToAdd: dirsToAdd,
-    filesToRemove: filesToRemove,
-    dirsToRemove: dirsToRemove
+      if (options.mode == "force")
+        from.forEach(function(fromFile) {
+          var toEquivalent = toByName[fromFile.name];
+          if (toEquivalent && !fromFile.isDir) filesToUpdate.push(fromFile.name);
+          if (!toEquivalent) {
+            if (fromFile.isDir) dirsToAdd.push(fromFile.name);
+            else filesToAdd.push(fromFile.name);
+          }
+        });
+      else
+        from.forEach(function(fromFile) {
+          var toEquivalent = toByName[fromFile.name];
+          if (!toEquivalent && !fromFile.isDir) filesToAdd.push(fromFile.name);
+          if (!toEquivalent && fromFile.isDir) dirsToAdd.push(fromFile.name);
+          if (toEquivalent) toEquivalent.wasOnFrom = true;
+          if (
+            toEquivalent &&
+            toEquivalent.size != fromFile.size &&
+            !fromFile.isDir
+          )
+            filesToUpdate.push(fromFile.name);
+        });
+
+      if (options.mode == "full")
+        to.filter(function(toFile) {
+          return !toFile.wasOnFrom;
+        }).forEach(function(toFile) {
+          if (toFile.isDir) dirsToRemove.push(toFile.name);
+          else filesToRemove.push(toFile.name);
+        });
+
+      var sync = {
+        _readMe:
+          "Review list of sync operations, then use Ftp-sync: Commit command to accept changes. Note that if you're not in your root directory then all the parent directories will also be uploaded",
+        _warning:
+          "This file should not be saved, reopened review file won't work!",
+        filesToUpdate: filesToUpdate,
+        filesToAdd: filesToAdd,
+        dirsToAdd: dirsToAdd,
+        filesToRemove: filesToRemove,
+        dirsToRemove: dirsToRemove
+      };
+
+      output(
+        getCurrentTime() +
+          " > [ftp-sync] compare done: " +
+          totalOperations(sync) +
+          " operations"
+      );
+      callback(null, sync);
+    } catch (e) {
+      callback(e);
+    }
   });
 };
 
@@ -656,7 +683,13 @@ var prepareSync = function(options, callback) {
         options.remotePath,
         function(err, remoteFiles) {
           if (err) callback(err);
-          else
+          else {
+            output(
+              getCurrentTime() +
+                " > [ftp-sync] listRemoteFiles done: " +
+                remoteFiles.length +
+                " entries"
+            );
             listLocalFiles(
               options.localPath,
               options.rootPath,
@@ -667,6 +700,7 @@ var prepareSync = function(options, callback) {
               },
               options
             );
+          }
         },
         null,
         options
