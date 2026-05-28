@@ -12,6 +12,17 @@ var ScpWrapper = require("./scp-wrapper");
 var vscode = require("vscode");
 
 var ftp;
+var cancelled = false;
+
+var makeCancelledError = function() {
+  var err = new Error("cancelled");
+  err.code = "FTP_SYNC_CANCELLED";
+  return err;
+};
+
+var isCancelled = function() {
+  return cancelled === true;
+};
 
 // This are the uncompleted requests.
 var openListRemoteFilesRequests = 0;
@@ -42,6 +53,10 @@ var listRemoteFiles = function(
   originalRemotePath,
   options
 ) {
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
   if (!originalRemotePath) {
@@ -62,6 +77,11 @@ var listRemoteFiles = function(
   ftp.list(remotePath, function(err, remoteFiles) {
     // The request is finish so remove it
     openListRemoteFilesRequests -= 1;
+
+    if (isCancelled()) {
+      callback(makeCancelledError());
+      return;
+    }
 
     if (err) {
       if (err.code == 450) callback(null, []);
@@ -139,9 +159,17 @@ var listRemoteFiles = function(
 };
 // list remote files, deep = 1
 const listOneDeepRemoteFiles = function(remotePath, callback) {
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
   ftp.list(remotePath, function(err, remoteFiles) {
+    if (isCancelled()) {
+      callback(makeCancelledError());
+      return;
+    }
     if (err) {
       if (err.code == 450) callback(null, []);
       else callback(err);
@@ -213,10 +241,18 @@ const deleteRemoteFile = function(remoteFilePath) {
         reject(err);
         return;
       }
+      if (isCancelled()) {
+        reject(makeCancelledError());
+        return;
+      }
       output(
         getCurrentTime() + " > [ftp-sync] deletRemoteFile: " + remoteFilePath
       );
       ftp.delete(remoteFilePath, function(err) {
+        if (isCancelled()) {
+          reject(makeCancelledError());
+          return;
+        }
         if (err) reject(err);
         else
           resolve({
@@ -229,6 +265,10 @@ const deleteRemoteFile = function(remoteFilePath) {
 };
 //add options
 var listLocalFiles = function(localPath, rootPath, callback, options) {
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   output(getCurrentTime() + " > [ftp-sync] listLocalFiles:" + localPath);
 
   var files = [];
@@ -283,6 +323,10 @@ var listLocalFiles = function(localPath, rootPath, callback, options) {
     fswalk.walk(
       localPath,
       function(basedir, filename, stat, next) {
+        if (isCancelled()) {
+          callback(makeCancelledError());
+          return;
+        }
         var filePath = path.join(basedir, filename);
         //when listing localFiles by onPrepareLocalProgress, ignore localfile
         if (isIgnored(filePath, ftpConfig.allow, ftpConfig.ignore))
@@ -300,6 +344,10 @@ var listLocalFiles = function(localPath, rootPath, callback, options) {
         next();
       },
       function(err) {
+        if (isCancelled()) {
+          callback(makeCancelledError());
+          return;
+        }
         callback(err, files);
       }
     );
@@ -384,6 +432,10 @@ var onPrepareRemoteProgress, onPrepareLocalProgress, onSyncProgress;
 var connected = false;
 var connect = function(callback) {
   output(getCurrentTime() + " > [sync-helper] connect");
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   if (connected == false) {
     // If password and private key path are required but missing from the
     // config file, prompt the user for a password and then connect
@@ -451,6 +503,10 @@ var prepareSync = function(options, callback) {
 };
 
 var executeSyncLocal = function(sync, options, callback) {
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   if (onSyncProgress != null)
     onSyncProgress(sync.startTotal - totalOperations(sync), sync.startTotal);
 
@@ -461,6 +517,10 @@ var executeSyncLocal = function(sync, options, callback) {
     output(getCurrentTime() + " > [ftp-sync] syncLocal replace: " + remote);
 
     ftp.get(remote, local, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncLocal(sync, options, callback);
     });
@@ -473,6 +533,10 @@ var executeSyncLocal = function(sync, options, callback) {
     output(getCurrentTime() + " > [ftp-sync] syncLocal createDir: " + dirToAdd);
 
     mkdirp(localPath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncLocal(sync, options, callback);
     });
@@ -491,6 +555,10 @@ var executeSyncLocal = function(sync, options, callback) {
     );
 
     fs.unlink(localPath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncLocal(sync, options, callback);
     });
@@ -501,6 +569,10 @@ var executeSyncLocal = function(sync, options, callback) {
     output(getCurrentTime() + " > [ftp-sync] syncLocal removeDir: " + dirToAdd);
 
     fs.rmdir(localPath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncLocal(sync, options, callback);
     });
@@ -510,6 +582,10 @@ var executeSyncLocal = function(sync, options, callback) {
 };
 
 var executeSyncRemote = function(sync, options, callback) {
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   if (onSyncProgress != null)
     onSyncProgress(sync.startTotal - totalOperations(sync), sync.startTotal);
 
@@ -520,6 +596,10 @@ var executeSyncRemote = function(sync, options, callback) {
     output(getCurrentTime() + " > [ftp-sync] syncRemote replace: " + local);
 
     ftp.put(local, remote, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncRemote(sync, options, callback);
     });
@@ -536,6 +616,10 @@ var executeSyncRemote = function(sync, options, callback) {
     ftp.mkdir(
       remotePath,
       function(err) {
+        if (isCancelled()) {
+          callback(makeCancelledError());
+          return;
+        }
         if (err) callback(err);
         else executeSyncRemote(sync, options, callback);
       },
@@ -556,6 +640,10 @@ var executeSyncRemote = function(sync, options, callback) {
     );
 
     ftp.delete(remotePath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncRemote(sync, options, callback);
     });
@@ -568,6 +656,10 @@ var executeSyncRemote = function(sync, options, callback) {
     );
 
     ftp.rmdir(remotePath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
+      }
       if (err) callback(err);
       else executeSyncRemote(sync, options, callback);
     });
@@ -656,6 +748,10 @@ var downloadFile = function(localPath, rootPath, callback) {
 
 var executeSync = function(sync, options, callback) {
   output(getCurrentTime() + " > [ftp-sync] sync starting");
+  if (isCancelled()) {
+    callback(makeCancelledError());
+    return;
+  }
   sync.startTotal = totalOperations(sync);
   connect(function(err) {
     if (err) callback(err);
@@ -688,6 +784,17 @@ var helper = {
   downloadFile: downloadFile,
   disconnect: function() {
     ftp.end();
+  },
+  cancel: function() {
+    cancelled = true;
+    try {
+      if (ftp) ftp.end();
+    } catch (e) {
+      // ignore
+    }
+  },
+  resetCancel: function() {
+    cancelled = false;
   },
   onPrepareRemoteProgress: function(callback) {
     onPrepareRemoteProgress = callback;

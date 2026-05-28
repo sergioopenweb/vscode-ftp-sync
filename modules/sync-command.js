@@ -49,10 +49,17 @@ module.exports = function(isUpload, getSyncHelper) {
 	});
 	
 	var prepareSync = function(options) {
+		if (getSyncHelper() && typeof getSyncHelper().resetCancel === "function") {
+			getSyncHelper().resetCancel();
+		}
 		var syncMessage = vscode.window.setStatusBarMessage("Ftp-sync: sync prepare in progress...");
 		getSyncHelper().prepareSync(options, function(err, sync) {
 			syncMessage.dispose();
 			if(prepareProgressMessage) prepareProgressMessage.dispose();
+			if(err && err.code === "FTP_SYNC_CANCELLED") {
+				vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
+				return;
+			}
 			if(err) vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
 			else {
 				var pickOptions = [{
@@ -77,6 +84,12 @@ module.exports = function(isUpload, getSyncHelper) {
 						helper.executeSync(getSyncHelper(), sync, options)
 					else if(result && result.operation == "review")
 						showSyncSummary(sync, options);
+					else {
+						// usuário cancelou no QuickPick: garante limpeza de status
+						if(prepareProgressMessage) prepareProgressMessage.dispose();
+						syncMessage.dispose();
+						vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
+					}
 				})
 				
 			}
