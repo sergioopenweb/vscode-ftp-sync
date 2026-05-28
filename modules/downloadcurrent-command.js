@@ -4,12 +4,7 @@ var ftpconfig = require("./ftp-config");
 var path = require("path");
 var isIgnored = require("./is-ignored");
 
-var formatError = require("./connection-errors").formatConnectionError;
-
 module.exports = function(fileUrl, getFtpSync) {
-	if (!ftpconfig.validateConfig()) {
-		return;
-	}
 
 	var filePath = fileUrl ? fileUrl.fsPath : undefined;
 
@@ -44,7 +39,7 @@ module.exports = function(fileUrl, getFtpSync) {
 	getFtpSync().downloadFile(filePath, ftpconfig.rootPath().fsPath, function(err) {
 		downloadStatus.dispose();
 		if (err)
-			vscode.window.showErrorMessage("Ftp-sync: Downloading " + fileName + " failed: " + formatError(err));
+			vscode.window.showErrorMessage("Ftp-sync: Downloading " + fileName + " failed: " + err);
 		else
 			vscode.window.setStatusBarMessage("Ftp-sync: " + fileName + " downloaded successfully!", STATUS_TIMEOUT);
 	})

@@ -8,7 +8,7 @@ This extension allows you to easily synchronise your local workspace (project fi
 
 ## Usage
 
-There are several commands available from the command palette (Ctrl+Shift+P on Windows/Linux). Use **Ftp-sync: Cancel** to stop an ongoing listing, sync, upload or download.
+There are four commands available. You can access them from the command palette (Ctrl+Shift+P on Windows/Linux).
 
 You can also sync a single file by right-clicking on it in the left menu and using the "Ftp-sync: Upload File" and "Ftp-sync: Download File" commands.
 
@@ -24,8 +24,6 @@ Initializes a default FTP-Sync configuration file in the `.vscode` directory. Op
 - protocol - The FTP protocol to be used. The default is `"ftp"` but you can also specify `"sftp"`.
 - uploadOnSave - Whether files should automatically be uploaded on save. The default is `false`.
 - passive - Specifies whether to use FTP passive mode. The default is `false`.
-- timeout - Timeout de conexão em milissegundos (FTP, SFTP e SCP). Padrão: `120000` (2 min). Para FTP lento, use por exemplo `300000` (5 min) ou `600000` (10 min).
-- transferKeepaliveInterval - A cada quantos ms enviar um arquivo mínimo ao servidor durante listagens longas (evita erro 421 "No transfer timeout" do FileZilla). Padrão: `45000`. Use `0` para desativar.
 - debug - Specifies whether to display debug information in an ftp-sync Output window. The default is `false`.
 - privateKeyPath - Specifies the path to the private key for SFTP. The default is `null`.
 - passphrase - Specifies the passphrase to use with the private key for SFTP. The default is `null`.
@@ -50,16 +48,13 @@ Commits reviewed list of changes made with Sync Local to Remote or Sync Remote t
 
 ---
 
-## Recém adicionado (fork)
-
-- Validação de configuração (`host`, `username`, `port`, `protocol`, chave SFTP)
-- Mensagens de erro de conexão mais claras (timeout, host, autenticação, etc.)
-- Menu de contexto no Explorer para sincronizar **pastas** (upload/download)
-
 ## To be added soon:
 
+- Config validation (add minimal configuration requirement)
+- Better connection error handling
 - More real life testing
 - Bug fixes
+- Context menu to sync folders (up/down)
 
 ## Future plans
 
@@ -74,17 +69,6 @@ Commits reviewed list of changes made with Sync Local to Remote or Sync Remote t
 
 ## Version history (fork)
 
-- 0.5.4
-  - Comando **Ftp-sync: Cancel** para interromper listagem/sync em andamento
-- 0.5.3
-  - Keepalive de transferência FTP (`transferKeepaliveInterval`) para evitar 421 "No transfer timeout"
-  - Mensagem de erro específica para timeout de transferência do servidor
-- 0.5.2
-  - Validação de `ftp-sync.json` antes dos comandos
-  - Mensagens de erro de conexão mais claras
-  - Sync de pasta no menu de contexto do Explorer
-- 0.5.1
-  - Opção `timeout` configurável (padrão 2 min; antes ~10–20 s nas bibliotecas)
 - 0.5.0
   - VS Code 1.85+, Node 18+, dependências atualizadas
   - Correção: `uploadOnSave: false` era ignorado quando `generatedFiles` vigiava o projeto inteiro

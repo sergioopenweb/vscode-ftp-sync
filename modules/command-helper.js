@@ -1,6 +1,4 @@
 var vscode = require('vscode');
-var formatError = require('./connection-errors').formatConnectionError;
-var syncCancel = require('./sync-cancel');
 
 var _store = new WeakMap();
 
@@ -15,12 +13,8 @@ module.exports = {
 		
 		syncHelper.executeSync(sync, options, function(err) {
 			if(syncInfoMessage) syncInfoMessage.dispose();
-			if(err) {
-				if (syncCancel.isCancelledError(err))
-					vscode.window.showInformationMessage("Ftp-sync: " + err);
-				else
-					vscode.window.showErrorMessage("Ftp-sync: sync error: " + formatError(err));
-			}
+			if(err)
+				vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
 			else
 				vscode.window.setStatusBarMessage("Ftp-sync: sync-complete!", STATUS_TIMEOUT);
 		})

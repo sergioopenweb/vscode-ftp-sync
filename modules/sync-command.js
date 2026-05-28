@@ -4,18 +4,8 @@ var ftpconfig = require('./ftp-config');
 var dirpick = require('./dirpick');
 var path = require('path');
 var helper = require('./command-helper');
-var formatError = require('./connection-errors').formatConnectionError;
-var syncCancel = require('./sync-cancel');
 
-function showSyncFailure(getSyncHelper, err) {
-	if (syncCancel.isCancelledError(err)) {
-		vscode.window.showInformationMessage("Ftp-sync: " + err);
-	} else {
-		vscode.window.showErrorMessage("Ftp-sync: sync error: " + formatError(err));
-	}
-}
-
-module.exports = function(isUpload, getSyncHelper, initialDirPath) {
+module.exports = function(isUpload, getSyncHelper) {
 	
 	if(!ftpconfig.validateConfig())
 		return;
@@ -63,7 +53,7 @@ module.exports = function(isUpload, getSyncHelper, initialDirPath) {
 		getSyncHelper().prepareSync(options, function(err, sync) {
 			syncMessage.dispose();
 			if(prepareProgressMessage) prepareProgressMessage.dispose();
-			if(err) showSyncFailure(getSyncHelper, err);
+			if(err) vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
 			else {
 				var pickOptions = [{
 						label: "Run",
@@ -130,9 +120,5 @@ module.exports = function(isUpload, getSyncHelper, initialDirPath) {
 		}
 	}
 	
-	if (initialDirPath != null) {
-		syncDir(initialDirPath);
-	} else {
-		dirpick(syncDir);
-	}
+	dirpick(syncDir);
 }

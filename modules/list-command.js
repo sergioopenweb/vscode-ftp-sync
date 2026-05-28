@@ -7,13 +7,7 @@ const output = require('./output');
 const downloadFn = require('./downloadcurrent-command');
 const uploadFn = require('./uploadcurrent-command');
 
-const formatError = require('./connection-errors').formatConnectionError;
-
 module.exports = function(fileUrl, getFtpSync) {
-  if (!ftpconfig.validateConfig()) {
-    return;
-  }
-
 	var filePath = fileUrl ? fileUrl.fsPath : undefined;
 
 	//We aren't getting a file, trying to take the current one
@@ -47,7 +41,7 @@ module.exports = function(fileUrl, getFtpSync) {
     getFtpSync().ListRemoteFilesByPath(filesRemotePath, function(err, files) {
       if (err) {
         // console.error('err:', err);
-        vscode.window.showErrorMessage('Ftp-sync: Listing failed: ' + formatError(err));
+        vscode.window.showErrorMessage('Ftp-sync: Listing failed: ' + err);
       } else {
         vscode.window.setStatusBarMessage('Ftp-sync: Listing successfully!', STATUS_TIMEOUT);
         // console.log('files:', files);
