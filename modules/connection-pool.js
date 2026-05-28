@@ -4,6 +4,7 @@ var SftpWrapper = require("./sftp-wrapper");
 var ScpWrapper = require("./scp-wrapper");
 var output = require("./output");
 var formatError = require("./connection-errors").formatConnectionError;
+var syncCancel = require("./sync-cancel");
 
 function createClient(protocol) {
   protocol = (protocol || "ftp").toLowerCase();
@@ -32,6 +33,7 @@ function ConnectionPool(ftpConfig) {
   this.passwordResolved = false;
   this.connecting = false;
   this.readyPromise = null;
+  this._readyReject = null;
 }
 
 ConnectionPool.prototype.getMaxConnections = function() {
@@ -118,6 +120,10 @@ ConnectionPool.prototype.ensureReady = function(callback) {
   var self = this;
   self._trimSlots();
 
+  if (syncCancel.isRequested()) {
+    return callback(syncCancel.CANCELLED_MSG);
+  }
+
   if (
     self.slots.length === self.maxConnections &&
     self.slots.every(function(s) {
@@ -140,10 +146,12 @@ ConnectionPool.prototype.ensureReady = function(callback) {
 
   self.connecting = true;
   self.readyPromise = new Promise(function(resolve, reject) {
+    self._readyReject = reject;
     self._resolveConfig(function(err, config) {
       if (err) {
         self.connecting = false;
         self.readyPromise = null;
+        self._readyReject = null;
         reject(err);
         return;
       }
@@ -151,6 +159,7 @@ ConnectionPool.prototype.ensureReady = function(callback) {
       var toCreate = self.maxConnections - self.slots.length;
       if (toCreate <= 0) {
         self.connecting = false;
+        self._readyReject = null;
         resolve();
         return;
       }
@@ -176,8 +185,10 @@ ConnectionPool.prototype.ensureReady = function(callback) {
               self.connecting = false;
               if (connectErr) {
                 self.readyPromise = null;
+                self._readyReject = null;
                 reject(connectErr);
               } else {
+                self._readyReject = null;
                 resolve();
               }
             }
@@ -252,7 +263,13 @@ ConnectionPool.prototype.getPrimary = function(callback) {
 ConnectionPool.prototype.disconnect = function() {
   this.waitQueue = [];
   this.connecting = false;
+  if (this._readyReject) {
+    try {
+      this._readyReject(syncCancel.CANCELLED_MSG);
+    } catch (e) {}
+  }
   this.readyPromise = null;
+  this._readyReject = null;
   this.resolvedConfig = null;
   this.passwordResolved = false;
 
@@ -269,7 +286,13 @@ ConnectionPool.prototype.disconnect = function() {
 ConnectionPool.prototype.cancel = function() {
   this.waitQueue = [];
   this.connecting = false;
+  if (this._readyReject) {
+    try {
+      this._readyReject(syncCancel.CANCELLED_MSG);
+    } catch (e) {}
+  }
   this.readyPromise = null;
+  this._readyReject = null;
 
   this.slots.forEach(function(slot) {
     try {
