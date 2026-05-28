@@ -6,7 +6,6 @@ var path = require('path');
 var helper = require('./command-helper');
 var formatError = require('./connection-errors').formatConnectionError;
 var syncCancel = require('./sync-cancel');
-var statusMessages = require("./status-messages");
 
 function showSyncFailure(getSyncHelper, err) {
 	if (syncCancel.isCancelledError(err)) {
@@ -51,20 +50,19 @@ module.exports = function(isUpload, getSyncHelper, initialDirPath) {
 	
 	var prepareProgressMessage;
 	getSyncHelper().onPrepareRemoteProgress(function(path) {
-		prepareProgressMessage = statusMessages.setPrepareProgressMessage(
-			"Ftp-sync: collecting remote files list (" + path + ")"
-		);
+		if(prepareProgressMessage) prepareProgressMessage.dispose();
+		prepareProgressMessage = vscode.window.setStatusBarMessage("Ftp-sync: collecting remote files list (" + path + ")");
 	});
 	getSyncHelper().onPrepareLocalProgress(function(path) {
-		prepareProgressMessage = statusMessages.setPrepareProgressMessage(
-			"Ftp-sync: collecting local files list (" + path + ")"
-		);
+		if(prepareProgressMessage) prepareProgressMessage.dispose();
+		prepareProgressMessage = vscode.window.setStatusBarMessage("Ftp-sync: collecting local files list (" + path + ")");
 	});
 	
 	var prepareSync = function(options) {
-		var syncMessage = statusMessages.setPrepareMessage("Ftp-sync: sync prepare in progress...");
+		var syncMessage = vscode.window.setStatusBarMessage("Ftp-sync: sync prepare in progress...");
 		getSyncHelper().prepareSync(options, function(err, sync) {
-			statusMessages.clearAll();
+			syncMessage.dispose();
+			if(prepareProgressMessage) prepareProgressMessage.dispose();
 			if(err) showSyncFailure(getSyncHelper, err);
 			else {
 				var pickOptions = [{
