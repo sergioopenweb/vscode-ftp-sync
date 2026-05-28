@@ -33,11 +33,11 @@ function ensure(ftp, ftpConfig, callback) {
     return callback();
   }
   if (interval === undefined || interval === null || interval === "") {
-    interval = 30000;
+    interval = 45000;
   } else {
     interval = Number(interval);
     if (isNaN(interval) || interval < 0) {
-      interval = 30000;
+      interval = 45000;
     }
   }
 

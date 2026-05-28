@@ -21,7 +21,7 @@ function formatConnectionError(err) {
       "O servidor FTP encerrou a conexão por falta de transferência de arquivos " +
       '(ex.: FileZilla "No transfer timeout"). Isso ocorre ao listar muitas pastas ou criar diretórios sem enviar arquivos. ' +
       "No servidor: aumente ou desative esse limite (0 = desligado). " +
-      'Na extensão: mantenha "transferKeepaliveInterval" em ftp-sync.json (padrão 30000 ms).'
+      'Na extensão: mantenha "transferKeepaliveInterval" em ftp-sync.json (padrão 45000 ms).'
     );
   }
 

@@ -2,7 +2,7 @@
   "name": "ftp-sync",
   "displayName": "FTP-Sync",
   "description": "Auto sync your work to remote FTP/SFTP server",
-  "version": "0.5.5",
+  "version": "0.5.4",
   "publisher": "openweb",
   "license": "MIT",
   "engines": {
