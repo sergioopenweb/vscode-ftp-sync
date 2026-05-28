@@ -57,7 +57,7 @@ module.exports = {
     protocol: "ftp",
     maxConnections: 4,
     uploadOnSave: false,
-    passive: false,
+    passive: true,
     debug: false,
     privateKeyPath: null,
     passphrase: null,

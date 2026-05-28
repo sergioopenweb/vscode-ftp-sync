@@ -23,7 +23,7 @@ Initializes a default FTP-Sync configuration file in the `.vscode` directory. Op
 - port - The port on the FTP server you would like to connect to. The default is `"21"`.
 - protocol - The FTP protocol to be used. The default is `"ftp"` but you can also specify `"sftp"`.
 - uploadOnSave - Whether files should automatically be uploaded on save. The default is `false`.
-- passive - Specifies whether to use FTP passive mode. The default is `false`.
+- passive - Specifies whether to use FTP passive mode. The default is `true` (recommended for most hosts behind NAT/firewalls).
 - debug - Specifies whether to display debug information in an ftp-sync Output window. The default is `false`.
 - privateKeyPath - Specifies the path to the private key for SFTP. The default is `null`.
 - passphrase - Specifies the passphrase to use with the private key for SFTP. The default is `null`.
@@ -77,6 +77,8 @@ Isso roda `npm version patch` e em seguida executa o `git commit` com os argumen
 
 ## Version history (fork)
 
+- 0.5.6
+  - Default `passive` alterado para `true` (modo passivo recomendado para FTP na internet)
 - 0.5.0
   - VS Code 1.85+, Node 18+, dependências atualizadas
   - Correção: `uploadOnSave: false` era ignorado quando `generatedFiles` vigiava o projeto inteiro
