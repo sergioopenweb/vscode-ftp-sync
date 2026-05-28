@@ -4,19 +4,8 @@ var ftpconfig = require('./ftp-config');
 var dirpick = require('./dirpick');
 var path = require('path');
 var helper = require('./command-helper');
-var formatError = require('./connection-errors').formatConnectionError;
-var syncCancel = require('./sync-cancel');
-var statusMessages = require("./status-messages");
 
-function showSyncFailure(getSyncHelper, err) {
-	if (syncCancel.isCancelledError(err)) {
-		vscode.window.showInformationMessage("Ftp-sync: " + err);
-	} else {
-		vscode.window.showErrorMessage("Ftp-sync: sync error: " + formatError(err));
-	}
-}
-
-module.exports = function(isUpload, getSyncHelper, initialDirPath) {
+module.exports = function(isUpload, getSyncHelper) {
 	
 	if(!ftpconfig.validateConfig())
 		return;
@@ -51,21 +40,20 @@ module.exports = function(isUpload, getSyncHelper, initialDirPath) {
 	
 	var prepareProgressMessage;
 	getSyncHelper().onPrepareRemoteProgress(function(path) {
-		prepareProgressMessage = statusMessages.setPrepareProgressMessage(
-			"Ftp-sync: collecting remote files list (" + path + ")"
-		);
+		if(prepareProgressMessage) prepareProgressMessage.dispose();
+		prepareProgressMessage = vscode.window.setStatusBarMessage("Ftp-sync: collecting remote files list (" + path + ")");
 	});
 	getSyncHelper().onPrepareLocalProgress(function(path) {
-		prepareProgressMessage = statusMessages.setPrepareProgressMessage(
-			"Ftp-sync: collecting local files list (" + path + ")"
-		);
+		if(prepareProgressMessage) prepareProgressMessage.dispose();
+		prepareProgressMessage = vscode.window.setStatusBarMessage("Ftp-sync: collecting local files list (" + path + ")");
 	});
 	
 	var prepareSync = function(options) {
-		var syncMessage = statusMessages.setPrepareMessage("Ftp-sync: sync prepare in progress...");
+		var syncMessage = vscode.window.setStatusBarMessage("Ftp-sync: sync prepare in progress...");
 		getSyncHelper().prepareSync(options, function(err, sync) {
-			statusMessages.clearAll();
-			if(err) showSyncFailure(getSyncHelper, err);
+			syncMessage.dispose();
+			if(prepareProgressMessage) prepareProgressMessage.dispose();
+			if(err) vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
 			else {
 				var pickOptions = [{
 						label: "Run",
@@ -132,9 +120,5 @@ module.exports = function(isUpload, getSyncHelper, initialDirPath) {
 		}
 	}
 	
-	if (initialDirPath != null) {
-		syncDir(initialDirPath);
-	} else {
-		dirpick(syncDir);
-	}
+	dirpick(syncDir);
 }

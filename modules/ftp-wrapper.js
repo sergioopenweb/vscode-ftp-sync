@@ -24,10 +24,6 @@ module.exports = function() {
     self.end = function() {
         ftp.end();
     }
-
-    self.abort = function(callback) {
-        ftp.abort(true, callback || function() {});
-    }
     
     self.onclose = function(callback) {
         ftp.once('close', callback);
