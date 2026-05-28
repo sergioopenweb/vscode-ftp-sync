@@ -55,7 +55,7 @@ module.exports = {
     port: 21,
     secure: false,
     protocol: "ftp",
-    maxConnections: 4,
+    maxConnections: 2,
     uploadOnSave: false,
     passive: true,
     debug: false,
