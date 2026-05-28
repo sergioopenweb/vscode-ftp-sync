@@ -52,47 +52,69 @@ module.exports = function(isUpload, getSyncHelper) {
 		if (getSyncHelper() && typeof getSyncHelper().resetCancel === "function") {
 			getSyncHelper().resetCancel();
 		}
+
 		var syncMessage = vscode.window.setStatusBarMessage("Ftp-sync: sync prepare in progress...");
-		getSyncHelper().prepareSync(options, function(err, sync) {
+		var finishPrepareUi = function() {
 			syncMessage.dispose();
 			if(prepareProgressMessage) prepareProgressMessage.dispose();
-			if(err && err.code === "FTP_SYNC_CANCELLED") {
-				vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
-				return;
-			}
-			if(err) vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
-			else {
-				var pickOptions = [{
-						label: "Run",
-						description: "Run all " + getSyncHelper().totalOperations(sync) + " operations now",
-						operation: "run"
-					}, {
-						label: "Review",
-						description: "Let me review and change operations list",
-						operation: "review"
-					}, {
-						label: "Cancel",
-						description: "I've changed my mind, cancel sync"
-					}];
+			prepareProgressMessage = null;
+		};
 
-				var pickResult = vscode.window.showQuickPick(pickOptions, {
-					placeHolder: "There are " + getSyncHelper().totalOperations(sync) + " operations to perform"
-				});
-				
-				pickResult.then(function(result) {
-					if(result && result.operation == "run")
-						helper.executeSync(getSyncHelper(), sync, options)
-					else if(result && result.operation == "review")
-						showSyncSummary(sync, options);
-					else {
-						// usuário cancelou no QuickPick: garante limpeza de status
-						if(prepareProgressMessage) prepareProgressMessage.dispose();
-						syncMessage.dispose();
-						vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
+		vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: "Ftp-sync: preparando sync…",
+			cancellable: true
+		}, function(_progress, token) {
+			token.onCancellationRequested(function() {
+				finishPrepareUi(); // limpa status imediatamente
+				if (getSyncHelper() && typeof getSyncHelper().cancel === "function") {
+					getSyncHelper().cancel();
+				}
+				vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
+			});
+
+			return new Promise(function(resolve) {
+				getSyncHelper().prepareSync(options, function(err, sync) {
+					finishPrepareUi();
+					if(err && err.code === "FTP_SYNC_CANCELLED") {
+						resolve();
+						return;
 					}
-				})
-				
-			}
+					if(err) {
+						vscode.window.showErrorMessage("Ftp-sync: sync error: " + err);
+						resolve();
+						return;
+					}
+
+					var pickOptions = [{
+							label: "Run",
+							description: "Run all " + getSyncHelper().totalOperations(sync) + " operations now",
+							operation: "run"
+						}, {
+							label: "Review",
+							description: "Let me review and change operations list",
+							operation: "review"
+						}, {
+							label: "Cancel",
+							description: "I've changed my mind, cancel sync"
+						}];
+
+					var pickResult = vscode.window.showQuickPick(pickOptions, {
+						placeHolder: "There are " + getSyncHelper().totalOperations(sync) + " operations to perform"
+					});
+					
+					pickResult.then(function(result) {
+						if(result && result.operation == "run")
+							helper.executeSync(getSyncHelper(), sync, options)
+						else if(result && result.operation == "review")
+							showSyncSummary(sync, options);
+						else {
+							vscode.window.setStatusBarMessage("Ftp-sync: sync cancelado.", STATUS_TIMEOUT);
+						}
+						resolve();
+					});
+				});
+			});
 		});
 	}
 	

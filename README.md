@@ -67,6 +67,14 @@ Commits reviewed list of changes made with Sync Local to Remote or Sync Remote t
 3. Na janela nova, abra um projeto e use **Ftp-sync: Init** para criar `.vscode/ftp-sync.json`.
 4. Para gerar um pacote instalável: `npm install -D @vscode/vsce && npm run package` → arquivo `ftp-sync-0.5.0.vsix`. Instale com *Extensions: Install from VSIX*.
 
+### Versionamento antes do commit (automático via script)
+
+Se você quiser garantir que **todo commit do projeto** venha com bump de versão, use o script do projeto em vez de `git commit` direto:
+
+- `npm run commit:patch -- -m "sua mensagem"`
+
+Isso roda `npm version patch` e em seguida executa o `git commit` com os argumentos que você passar.
+
 ## Version history (fork)
 
 - 0.5.0
