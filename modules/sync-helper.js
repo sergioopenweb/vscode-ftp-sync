@@ -18,6 +18,8 @@ var syncProgressDone = 0;
 var syncProgressTotal = 0;
 var connectionOpenedAt = 0;
 var lastTransferAt = 0;
+var activeTransfers = 0;
+var pendingPoolReset = false;
 
 var makeCancelledError = function() {
   var err = new Error("cancelled");
@@ -31,6 +33,7 @@ var isCancelled = function() {
 
 // This are the uncompleted requests.
 var openListRemoteFilesRequests = 0;
+var preparingRemoteFileList = false;
 
 // get timestamp
 var getCurrentTime = function() {
@@ -66,11 +69,13 @@ var listRemoteFiles = function(
   remotePath = upath.toUnix(remotePath);
   if (!originalRemotePath) {
     originalRemotePath = remotePath;
+    preparingRemoteFileList = true;
 
     // Overwrite original callback to execute only if all open request are finish
     var oldCallback = callback;
     callback = function(error, result) {
       if (openListRemoteFilesRequests === 0) {
+        preparingRemoteFileList = false;
         oldCallback(error, result);
       }
     };
@@ -79,7 +84,7 @@ var listRemoteFiles = function(
   // Add a new open request
   openListRemoteFilesRequests += 1;
 
-  ftpListWithRetry(remotePath, function(err, remoteFiles) {
+  ftp.list(remotePath, function(err, remoteFiles) {
     // The request is finish so remove it
     openListRemoteFilesRequests -= 1;
 
@@ -168,7 +173,7 @@ const listOneDeepRemoteFiles = function(remotePath, callback) {
   }
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
-  ftpListWithRetry(remotePath, function(err, remoteFiles) {
+  ftp.list(remotePath, function(err, remoteFiles) {
     if (isCancelled()) {
       callback(makeCancelledError());
       return;
@@ -518,51 +523,19 @@ var getNoTransferIdleMs = function() {
   return Date.now() - since;
 };
 
-var ensureFreshConnection = function(callback) {
-  if (
-    connected &&
-    connectionOpenedAt &&
-    getNoTransferIdleMs() < getNoTransferReconnectMs()
-  ) {
-    callback();
+var safeResetForRetry = function() {
+  if (activeTransfers > 0) {
+    pendingPoolReset = true;
     return;
   }
   resetConnection();
-  connect(function(err) {
-    callback(err);
-  });
 };
 
-var runNonTransferWithRetry = function(label, attemptFn, callback) {
-  withRetry(label, function(done) {
-    ensureFreshConnection(function(err) {
-      if (err) {
-        done(err);
-        return;
-      }
-      attemptFn(done);
-    });
-  }, callback);
-};
-
-var ftpListWithRetry = function(remotePath, callback) {
-  runNonTransferWithRetry("list " + remotePath, function(done) {
-    ftp.list(remotePath, function(err, remoteFiles) {
-      if (err) {
-        if (err.code == 450) {
-          callback(null, []);
-          done();
-        } else {
-          done(err);
-        }
-        return;
-      }
-      callback(null, remoteFiles);
-      done();
-    });
-  }, function(err) {
-    if (err) callback(err);
-  });
+var flushPendingPoolReset = function() {
+  if (activeTransfers === 0 && pendingPoolReset) {
+    resetConnection();
+    pendingPoolReset = false;
+  }
 };
 
 var getRetrySettings = function() {
@@ -575,24 +548,17 @@ var getRetrySettings = function() {
   return { count: n, delay: Math.floor(delay) };
 };
 
-var isRetryableError = function(err) {
+var isTransferRetryableError = function(err) {
   if (!err) return false;
   if (err.code === "FTP_SYNC_CANCELLED") return false;
   var msg = String(err.message || err).toLowerCase();
-  if (
-    /timeout|econnreset|econnrefused|epipe|socket hang up|connection closed|connection lost|no transfer|no-transfer|broken pipe|enetunreach|421/.test(
-      msg
-    )
-  )
-    return true;
-  var code = err.code;
+  if (/no transfer|no-transfer/.test(msg)) return true;
+  if (err.code === 421 || /421/.test(msg)) return true;
   return (
-    code === 421 ||
-    code === "ECONNRESET" ||
-    code === "ETIMEDOUT" ||
-    code === "ECONNREFUSED" ||
-    code === "EPIPE" ||
-    code === "ENOTFOUND"
+    err.code === "ECONNRESET" ||
+    err.code === "ETIMEDOUT" ||
+    err.code === "EPIPE" ||
+    /connection closed|connection lost|socket hang up|broken pipe/.test(msg)
   );
 };
 
@@ -604,10 +570,15 @@ var resetConnection = function() {
   try {
     if (ftp) ftp.end();
   } catch (e) {}
+  if (ftpConfig) ftp = createWrapper(ftpConfig);
 };
 
 var withRetry = function(label, attemptFn, callback) {
   var settings = getRetrySettings();
+  if (settings.count === 0) {
+    attemptFn(callback);
+    return;
+  }
   var maxAttempts = settings.count + 1;
   var attempt = 0;
   var retryStatus = null;
@@ -629,10 +600,10 @@ var withRetry = function(label, attemptFn, callback) {
     attemptFn(function(err) {
       if (!err) {
         cleanupStatus();
-        callback();
+        callback.apply(null, arguments);
         return;
       }
-      if (!isRetryableError(err) || attempt >= maxAttempts) {
+      if (!isTransferRetryableError(err) || attempt >= maxAttempts) {
         cleanupStatus();
         callback(err);
         return;
@@ -648,7 +619,7 @@ var withRetry = function(label, attemptFn, callback) {
           "): " +
           err.message
       );
-      resetConnection();
+      safeResetForRetry();
       retryStatus = vscode.window.setStatusBarMessage(
         "Ftp-sync: tentativa " +
           (attempt + 1) +
@@ -669,12 +640,22 @@ var runTransferWithRetry = function(label, runWithClient, callback) {
   withRetry(label, function(done) {
     var needsReconnect =
       !connected || getNoTransferIdleMs() >= getNoTransferReconnectMs();
-    if (needsReconnect) resetConnection();
-    if (transferPoolReady && connected && !needsReconnect) {
+    if (needsReconnect && activeTransfers === 0) {
+      resetConnection();
+    }
+
+    var execute = function() {
+      activeTransfers += 1;
       runWithClient(function(err) {
+        activeTransfers -= 1;
         if (!err) markTransferActivity();
+        flushPendingPoolReset();
         done(err);
       });
+    };
+
+    if (transferPoolReady && connected && !needsReconnect) {
+      execute();
       return;
     }
     connect(function(err) {
@@ -687,10 +668,7 @@ var runTransferWithRetry = function(label, runWithClient, callback) {
           done(poolErr);
           return;
         }
-        runWithClient(function(err2) {
-          if (!err2) markTransferActivity();
-          done(err2);
-        });
+        execute();
       });
     });
   }, callback);
@@ -893,7 +871,7 @@ var connect = function(callback) {
   } else callback();
 };
 
-var prepareSyncOnce = function(options, callback) {
+var prepareSync = function(options, callback) {
   connect(function(err) {
     if (err) callback(err);
     else
@@ -924,12 +902,6 @@ var prepareSyncOnce = function(options, callback) {
         options
       );
   });
-};
-
-var prepareSync = function(options, callback) {
-  withRetry("prepare sync", function(done) {
-    prepareSyncOnce(options, done);
-  }, callback);
 };
 
 var executeSyncLocal = function(sync, options, callback) {
@@ -1054,18 +1026,8 @@ var executeSyncRemote = function(sync, options, callback) {
       getCurrentTime() + " > [ftp-sync] syncRemote createDir: " + dirToAdd
     );
 
-    runNonTransferWithRetry(
-      "mkdir " + dirToAdd,
-      function(done) {
-        ftp.mkdir(
-          remotePath,
-          function(err) {
-            if (err) done(err);
-            else done();
-          },
-          true
-        );
-      },
+    ftp.mkdir(
+      remotePath,
       function(err) {
         if (isCancelled()) {
           callback(makeCancelledError());
@@ -1076,7 +1038,8 @@ var executeSyncRemote = function(sync, options, callback) {
           syncProgressDone += 1;
           executeSyncRemote(sync, options, callback);
         }
-      }
+      },
+      true
     );
   } else if (sync.filesToAdd.length > 0 || sync.filesToUpdate.length > 0) {
     var files = sync.filesToAdd.concat(sync.filesToUpdate);
@@ -1128,23 +1091,17 @@ var executeSyncRemote = function(sync, options, callback) {
       getCurrentTime() + " > [ftp-sync] syncRemote removeFile: " + fileToRemove
     );
 
-    runNonTransferWithRetry(
-      "delete " + fileToRemove,
-      function(done) {
-        ftp.delete(remotePath, done);
-      },
-      function(err) {
-        if (isCancelled()) {
-          callback(makeCancelledError());
-          return;
-        }
-        if (err) callback(err);
-        else {
-          syncProgressDone += 1;
-          executeSyncRemote(sync, options, callback);
-        }
+    ftp.delete(remotePath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
       }
-    );
+      if (err) callback(err);
+      else {
+        syncProgressDone += 1;
+        executeSyncRemote(sync, options, callback);
+      }
+    });
   } else if (sync.dirsToRemove.length > 0) {
     var dirToRemove = sync.dirsToRemove.pop();
     var remotePath = upath.toUnix(path.join(options.remotePath, dirToRemove));
@@ -1153,30 +1110,24 @@ var executeSyncRemote = function(sync, options, callback) {
       getCurrentTime() + " > [ftp-sync] syncRemote removeDir: " + dirToRemove
     );
 
-    runNonTransferWithRetry(
-      "rmdir " + dirToRemove,
-      function(done) {
-        ftp.rmdir(remotePath, done);
-      },
-      function(err) {
-        if (isCancelled()) {
-          callback(makeCancelledError());
-          return;
-        }
-        if (err) callback(err);
-        else {
-          syncProgressDone += 1;
-          executeSyncRemote(sync, options, callback);
-        }
+    ftp.rmdir(remotePath, function(err) {
+      if (isCancelled()) {
+        callback(makeCancelledError());
+        return;
       }
-    );
+      if (err) callback(err);
+      else {
+        syncProgressDone += 1;
+        executeSyncRemote(sync, options, callback);
+      }
+    });
   } else {
     callback();
   }
 };
 
 var ensureDirExists = function(remoteDir, callback) {
-  ftpListWithRetry(path.posix.join(remoteDir, ".."), function(err, list) {
+  ftp.list(path.posix.join(remoteDir, ".."), function(err, list) {
     if (err) {
       ensureDirExists(path.posix.join(remoteDir, ".."), function() {
         ensureDirExists(remoteDir, callback);
@@ -1186,16 +1137,14 @@ var ensureDirExists = function(remoteDir, callback) {
     })) {
       callback();
     } else {
-      runNonTransferWithRetry("mkdir " + remoteDir, function(done) {
-        ftp.mkdir(
-          remoteDir,
-          function(err) {
-            if (err) done(err);
-            else done();
-          },
-          true
-        );
-      }, callback);
+      ftp.mkdir(
+        remoteDir,
+        function(err) {
+          if (err) callback(err);
+          else callback();
+        },
+        true
+      );
     }
   });
 };
@@ -1339,6 +1288,8 @@ var helper = {
   },
   cancel: function() {
     cancelled = true;
+    activeTransfers = 0;
+    pendingPoolReset = false;
     try {
       if (ftp) ftp.end();
       endTransferPool();
@@ -1348,6 +1299,8 @@ var helper = {
   },
   resetCancel: function() {
     cancelled = false;
+    activeTransfers = 0;
+    pendingPoolReset = false;
   },
   onPrepareRemoteProgress: function(callback) {
     onPrepareRemoteProgress = callback;
