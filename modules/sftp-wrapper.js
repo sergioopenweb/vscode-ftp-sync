@@ -23,7 +23,9 @@ module.exports = function() {
             password: ftpConfig.password,
             privateKey: privateKey,
             passphrase: ftpConfig.passphrase,
-            agent: ftpConfig.agent
+            agent: ftpConfig.agent,
+            readyTimeout: ftpConfig.connTimeout || 10000,
+            keepaliveInterval: ftpConfig.keepalive || 10000
         });
     }
     

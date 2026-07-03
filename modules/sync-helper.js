@@ -20,6 +20,9 @@ var connectionOpenedAt = 0;
 var lastTransferAt = 0;
 var activeTransfers = 0;
 var pendingPoolReset = false;
+var connecting = false;
+var connectCallbacks = [];
+var connectTimeoutId = null;
 
 var makeCancelledError = function() {
   var err = new Error("cancelled");
@@ -74,6 +77,11 @@ var listRemoteFiles = function(
     // Overwrite original callback to execute only if all open request are finish
     var oldCallback = callback;
     callback = function(error, result) {
+      if (error) {
+        preparingRemoteFileList = false;
+        oldCallback(error, result);
+        return;
+      }
       if (openListRemoteFilesRequests === 0) {
         preparingRemoteFileList = false;
         oldCallback(error, result);
@@ -84,7 +92,7 @@ var listRemoteFiles = function(
   // Add a new open request
   openListRemoteFilesRequests += 1;
 
-  ftp.list(remotePath, function(err, remoteFiles) {
+  ftpListWithRetry(remotePath, function(err, remoteFiles) {
     // The request is finish so remove it
     openListRemoteFilesRequests -= 1;
 
@@ -173,7 +181,7 @@ const listOneDeepRemoteFiles = function(remotePath, callback) {
   }
   output(getCurrentTime() + " > [ftp-sync] listRemoteFiles: " + remotePath);
   remotePath = upath.toUnix(remotePath);
-  ftp.list(remotePath, function(err, remoteFiles) {
+  ftpListWithRetry(remotePath, function(err, remoteFiles) {
     if (isCancelled()) {
       callback(makeCancelledError());
       return;
@@ -538,6 +546,138 @@ var flushPendingPoolReset = function() {
   }
 };
 
+var getConnectTimeoutMs = function() {
+  var ms = Number(ftpConfig && ftpConfig.connTimeout);
+  if (!Number.isFinite(ms) || ms < 1000) ms = 10000;
+  if (ms > 120000) ms = 120000;
+  return Math.floor(ms);
+};
+
+var flushConnectCallbacks = function(err) {
+  if (connectTimeoutId) {
+    clearTimeout(connectTimeoutId);
+    connectTimeoutId = null;
+  }
+  connecting = false;
+  var cbs = connectCallbacks.slice();
+  connectCallbacks = [];
+  cbs.forEach(function(cb) {
+    try {
+      cb(err);
+    } catch (e) {}
+  });
+};
+
+var finishConnectReady = function(err) {
+  if (connectTimeoutId) {
+    clearTimeout(connectTimeoutId);
+    connectTimeoutId = null;
+  }
+  if (err) {
+    connected = false;
+    flushConnectCallbacks(err);
+    return;
+  }
+  connected = true;
+  markConnectionOpened();
+  flushConnectCallbacks(null);
+};
+
+var beginConnectionAttempt = function() {
+  if (!ftp) {
+    flushConnectCallbacks(new Error("FTP client not initialized"));
+    return;
+  }
+
+  var timedOut = false;
+  connectTimeoutId = setTimeout(function() {
+    if (!connecting) return;
+    timedOut = true;
+    output(
+      getCurrentTime() +
+        " > [sync-helper] connect timeout after " +
+        getConnectTimeoutMs() +
+        "ms"
+    );
+    try {
+      if (ftp) ftp.end();
+    } catch (e) {}
+    connected = false;
+    flushConnectCallbacks(
+      new Error("Connection timed out after " + getConnectTimeoutMs() + "ms")
+    );
+  }, getConnectTimeoutMs());
+
+  ftp.onready(function() {
+    if (timedOut || !connecting) return;
+    if (!ftpConfig.passive && ftpConfig.protocol != "sftp") finishConnectReady();
+    else if (ftpConfig.protocol == "sftp") ftp.goSftp(finishConnectReady);
+    else if (ftpConfig.passive) ftp.pasv(finishConnectReady);
+    else finishConnectReady();
+  });
+
+  ftp.onerror(function(err) {
+    if (timedOut) return;
+    connected = false;
+    finishConnectReady(err);
+  });
+
+  ftp.onclose(function() {
+    output(getCurrentTime() + " > [ftp-sync] connection closed");
+    connected = false;
+  });
+
+  ftp.connect(buildConnectOptions());
+};
+
+var isRetryableError = function(err) {
+  return isTransferRetryableError(err);
+};
+
+var runNonTransferWithRetry = function(label, attemptFn, callback) {
+  withRetry(
+    label,
+    function(done) {
+      if (isCancelled()) {
+        done(makeCancelledError());
+        return;
+      }
+      connect(function(err) {
+        if (err) {
+          done(err);
+          return;
+        }
+        attemptFn(done);
+      });
+    },
+    callback
+  );
+};
+
+var ftpListWithRetry = function(remotePath, callback) {
+  runNonTransferWithRetry(
+    "list " + remotePath,
+    function(done) {
+      ftp.list(remotePath, function(err, remoteFiles) {
+        if (err) {
+          if (err.code == 450) {
+            callback(null, []);
+            done();
+          } else {
+            done(err);
+          }
+          return;
+        }
+        callback(null, remoteFiles);
+        done();
+      });
+    },
+    function(err) {
+      if (err) callback(err);
+    }
+  );
+};
+
 var getRetrySettings = function() {
   var n = Number(ftpConfig && ftpConfig.retryCount);
   if (!Number.isFinite(n) || n < 0) n = 3;
@@ -554,16 +694,24 @@ var isTransferRetryableError = function(err) {
   var msg = String(err.message || err).toLowerCase();
   if (/no transfer|no-transfer/.test(msg)) return true;
   if (err.code === 421 || /421/.test(msg)) return true;
+  if (/timeout|timed out|econnrefused|enetunreach|enotfound/.test(msg)) return true;
   return (
     err.code === "ECONNRESET" ||
     err.code === "ETIMEDOUT" ||
     err.code === "EPIPE" ||
+    err.code === "ECONNREFUSED" ||
+    err.code === "ENOTFOUND" ||
     /connection closed|connection lost|socket hang up|broken pipe/.test(msg)
   );
 };
 
 var resetConnection = function() {
   connected = false;
+  connecting = false;
+  if (connectTimeoutId) {
+    clearTimeout(connectTimeoutId);
+    connectTimeoutId = null;
+  }
   connectionOpenedAt = 0;
   lastTransferAt = 0;
   endTransferPool();
@@ -829,46 +977,50 @@ var connect = function(callback) {
     callback(makeCancelledError());
     return;
   }
-  if (connected == false) {
-    // If password and private key path are required but missing from the
-    // config file, prompt the user for a password and then connect
-    if (
-      ((ftpConfig.protocol == "sftp" || ftpConfig.protocol == "scp") &&
-        !ftpConfig.password &&
-        !ftpConfig.privateKeyPath) ||
-      !ftpConfig.password
-    ) {
-      vscode.window
-        .showInputBox({
-          prompt: '[ftp-sync] Password for "' + ftpConfig.host + '"',
-          password: true
-        })
-        .then(function(password) {
-          ftpConfig.password = password;
-          ftp.connect(
-            buildConnectOptions({
-              password: password
-            })
-          );
-        });
-    } else {
-      // Otherwise just connect
-      ftp.connect(buildConnectOptions());
-    }
+  if (connected) {
+    callback();
+    return;
+  }
 
-    ftp.onready(function() {
-      connected = true;
-      markConnectionOpened();
-      if (!ftpConfig.passive && ftpConfig.protocol != "sftp") callback();
-      else if (ftpConfig.protocol == "sftp") ftp.goSftp(callback);
-      else if (ftpConfig.passive) ftp.pasv(callback);
-    });
-    ftp.onerror(callback);
-    ftp.onclose(function(err) {
-      output(getCurrentTime() + " > [ftp-sync] connection closed");
-      connected = false;
-    });
-  } else callback();
+  connectCallbacks.push(callback);
+  if (connecting) return;
+
+  connecting = true;
+
+  var startAttempt = function() {
+    if (isCancelled()) {
+      flushConnectCallbacks(makeCancelledError());
+      return;
+    }
+    beginConnectionAttempt();
+  };
+
+  if (
+    ((ftpConfig.protocol == "sftp" || ftpConfig.protocol == "scp") &&
+      !ftpConfig.password &&
+      !ftpConfig.privateKeyPath) ||
+    !ftpConfig.password
+  ) {
+    vscode.window
+      .showInputBox({
+        prompt: '[ftp-sync] Password for "' + ftpConfig.host + '"',
+        password: true
+      })
+      .then(function(password) {
+        if (isCancelled()) {
+          flushConnectCallbacks(makeCancelledError());
+          return;
+        }
+        if (!password) {
+          flushConnectCallbacks(new Error("Password required"));
+          return;
+        }
+        ftpConfig.password = password;
+        startAttempt();
+      });
+  } else {
+    startAttempt();
+  }
 };
 
 var prepareSync = function(options, callback) {
@@ -1290,12 +1442,15 @@ var helper = {
     cancelled = true;
     activeTransfers = 0;
     pendingPoolReset = false;
+    flushConnectCallbacks(makeCancelledError());
     try {
       if (ftp) ftp.end();
       endTransferPool();
     } catch (e) {
       // ignore
     }
+    connected = false;
+    connecting = false;
   },
   resetCancel: function() {
     cancelled = false;
