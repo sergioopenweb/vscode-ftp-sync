@@ -23,6 +23,7 @@ var pendingPoolReset = false;
 var connecting = false;
 var connectCallbacks = [];
 var connectTimeoutId = null;
+var poolBuilding = false;
 
 var makeCancelledError = function() {
   var err = new Error("cancelled");
@@ -625,6 +626,7 @@ var beginConnectionAttempt = function() {
   ftp.onclose(function() {
     output(getCurrentTime() + " > [ftp-sync] connection closed");
     connected = false;
+    invalidateTransferPool();
   });
 
   ftp.connect(buildConnectOptions());
@@ -686,6 +688,48 @@ var getRetrySettings = function() {
   var delay = Number(ftpConfig && ftpConfig.retryDelayMs);
   if (!Number.isFinite(delay) || delay < 0) delay = 2000;
   return { count: n, delay: Math.floor(delay) };
+};
+
+var getTransferTimeoutMs = function() {
+  var ms = Number(ftpConfig && ftpConfig.transferTimeout);
+  if (!Number.isFinite(ms) || ms < 5000) {
+    ms = Number(ftpConfig && ftpConfig.pasvTimeout);
+    if (!Number.isFinite(ms) || ms < 5000) ms = 10000;
+    ms = ms * 12;
+  }
+  if (ms > 600000) ms = 600000;
+  return Math.floor(ms);
+};
+
+var withTransferTimeout = function(label, fn, callback) {
+  var finished = false;
+  var timer = setTimeout(function() {
+    if (finished) return;
+    finished = true;
+    output(
+      getCurrentTime() + " > [ftp-sync] transfer timeout (" + label + ")"
+    );
+    callback(new Error("Transfer timed out: " + label));
+  }, getTransferTimeoutMs());
+
+  fn(function(err) {
+    if (finished) return;
+    finished = true;
+    clearTimeout(timer);
+    callback(err);
+  });
+};
+
+var invalidateTransferPool = function() {
+  transferPoolReady = false;
+  connected = false;
+  if (!transferPool || poolBuilding) return;
+  transferPool.forEach(function(c) {
+    try {
+      c.end();
+    } catch (e) {}
+  });
+  transferPool = null;
 };
 
 var isTransferRetryableError = function(err) {
@@ -786,15 +830,20 @@ var withRetry = function(label, attemptFn, callback) {
 
 var runTransferWithRetry = function(label, runWithClient, callback) {
   withRetry(label, function(done) {
+    var maxConn = normalizeMaxConnections(ftpConfig);
     var needsReconnect =
-      !connected || getNoTransferIdleMs() >= getNoTransferReconnectMs();
+      !connected ||
+      (maxConn > 1 && !transferPoolReady) ||
+      getNoTransferIdleMs() >= getNoTransferReconnectMs();
     if (needsReconnect && activeTransfers === 0) {
       resetConnection();
     }
 
     var execute = function() {
       activeTransfers += 1;
-      runWithClient(function(err) {
+      withTransferTimeout(label, function(attemptDone) {
+        runWithClient(attemptDone);
+      }, function(err) {
         activeTransfers -= 1;
         if (!err) markTransferActivity();
         flushPendingPoolReset();
@@ -841,17 +890,25 @@ var connectClient = function(client, callback) {
     else if (ftpConfig.passive) client.pasv(finishOnce);
     else finishOnce();
   });
-  client.onerror(finishOnce);
-  client.onclose(function() {});
+  client.onerror(function(err) {
+    invalidateTransferPool();
+    finishOnce(err);
+  });
+  client.onclose(function() {
+    invalidateTransferPool();
+  });
 
   client.connect(buildConnectOptions());
 };
 
 var ensureTransferPool = function(callback) {
-  if (transferPoolReady) {
+  if (transferPoolReady && transferPool && transferPool.length > 0) {
     callback();
     return;
   }
+
+  transferPoolReady = false;
+  transferPool = null;
 
   var max = normalizeMaxConnections(ftpConfig);
   if (max <= 1) {
@@ -864,12 +921,14 @@ var ensureTransferPool = function(callback) {
   transferPoolReady = false;
   transferPool = [];
 
+  poolBuilding = true;
   var remaining = max;
   var failed = false;
   var finishOnce = function(err) {
     if (failed) return;
     if (err) {
       failed = true;
+      poolBuilding = false;
       try {
         if (transferPool) {
           transferPool.forEach(function(c) {
@@ -887,7 +946,8 @@ var ensureTransferPool = function(callback) {
     }
     remaining -= 1;
     if (remaining === 0) {
-      transferPoolReady = true;
+      poolBuilding = false;
+      transferPoolReady = transferPool.length > 0;
       callback();
     }
   };
