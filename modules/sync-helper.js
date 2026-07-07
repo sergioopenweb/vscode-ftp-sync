@@ -20,6 +20,8 @@ var connectionOpenedAt = 0;
 var lastTransferAt = 0;
 var activeTransfers = 0;
 var pendingPoolReset = false;
+var pendingTransferAborts = [];
+var poolBuildWaiters = [];
 var connecting = false;
 var connectCallbacks = [];
 var connectTimeoutId = null;
@@ -701,28 +703,34 @@ var getTransferTimeoutMs = function() {
   return Math.floor(ms);
 };
 
-var withTransferTimeout = function(label, fn, callback) {
-  var finished = false;
-  var timer = setTimeout(function() {
-    if (finished) return;
-    finished = true;
-    output(
-      getCurrentTime() + " > [ftp-sync] transfer timeout (" + label + ")"
-    );
-    callback(new Error("Transfer timed out: " + label));
-  }, getTransferTimeoutMs());
+var registerTransferAbort = function(fn) {
+  pendingTransferAborts.push(fn);
+};
 
-  fn(function(err) {
-    if (finished) return;
-    finished = true;
-    clearTimeout(timer);
-    callback(err);
+var unregisterTransferAbort = function(fn) {
+  var idx = pendingTransferAborts.indexOf(fn);
+  if (idx !== -1) pendingTransferAborts.splice(idx, 1);
+};
+
+// O modulo 'ftp' descarta o callback do comando em andamento quando o socket
+// fecha (_reset zera _curReq/_queue sem chamar cb). Sem isto, a operacao
+// so falharia no timeout de transferencia (~2min). Abortamos na hora para o
+// retry disparar imediatamente.
+var abortAllPendingTransfers = function() {
+  if (pendingTransferAborts.length === 0) return;
+  var aborts = pendingTransferAborts.slice();
+  pendingTransferAborts = [];
+  aborts.forEach(function(fn) {
+    try {
+      fn();
+    } catch (e) {}
   });
 };
 
 var invalidateTransferPool = function() {
   transferPoolReady = false;
   connected = false;
+  abortAllPendingTransfers();
   if (!transferPool || poolBuilding) return;
   transferPool.forEach(function(c) {
     try {
@@ -730,6 +738,13 @@ var invalidateTransferPool = function() {
     } catch (e) {}
   });
   transferPool = null;
+};
+
+var isDirAlreadyExistsError = function(err) {
+  if (!err) return true;
+  if (err.code == 550 || err.code == 521) return true;
+  var msg = String(err.message || err).toLowerCase();
+  return /already exists|file exists|directory exists/.test(msg);
 };
 
 var isTransferRetryableError = function(err) {
@@ -835,19 +850,52 @@ var runTransferWithRetry = function(label, runWithClient, callback) {
       !connected ||
       (maxConn > 1 && !transferPoolReady) ||
       getNoTransferIdleMs() >= getNoTransferReconnectMs();
-    if (needsReconnect && activeTransfers === 0) {
+    // Nao reseta se ja ha uma reconexao/build em andamento, senao retries
+    // simultaneos (disparados por um abort) interrompem uns aos outros.
+    if (needsReconnect && activeTransfers === 0 && !connecting && !poolBuilding) {
       resetConnection();
     }
 
     var execute = function() {
       activeTransfers += 1;
-      withTransferTimeout(label, function(attemptDone) {
-        runWithClient(attemptDone);
-      }, function(err) {
+
+      var finished = false;
+      var timer = null;
+      var abortEntry = null;
+
+      var finish = function(err) {
+        if (finished) return;
+        finished = true;
+        if (timer) clearTimeout(timer);
+        if (abortEntry) unregisterTransferAbort(abortEntry);
         activeTransfers -= 1;
         if (!err) markTransferActivity();
         flushPendingPoolReset();
         done(err);
+      };
+
+      abortEntry = function() {
+        output(
+          getCurrentTime() +
+            " > [ftp-sync] transfer aborted (" +
+            label +
+            "): connection closed"
+        );
+        var err = new Error("connection closed");
+        err.code = "ECONNRESET";
+        finish(err);
+      };
+      registerTransferAbort(abortEntry);
+
+      timer = setTimeout(function() {
+        output(
+          getCurrentTime() + " > [ftp-sync] transfer timeout (" + label + ")"
+        );
+        finish(new Error("Transfer timed out: " + label));
+      }, getTransferTimeoutMs());
+
+      runWithClient(function(err) {
+        finish(err);
       });
     };
 
@@ -901,9 +949,25 @@ var connectClient = function(client, callback) {
   client.connect(buildConnectOptions());
 };
 
+var flushPoolBuildWaiters = function(err) {
+  var waiters = poolBuildWaiters.slice();
+  poolBuildWaiters = [];
+  waiters.forEach(function(cb) {
+    try {
+      cb(err);
+    } catch (e) {}
+  });
+};
+
 var ensureTransferPool = function(callback) {
   if (transferPoolReady && transferPool && transferPool.length > 0) {
     callback();
+    return;
+  }
+
+  // Evita builds concorrentes: se ja esta construindo, aguarda o mesmo build.
+  if (poolBuilding) {
+    poolBuildWaiters.push(callback);
     return;
   }
 
@@ -942,6 +1006,7 @@ var ensureTransferPool = function(callback) {
         transferPoolReady = false;
       }
       callback(err);
+      flushPoolBuildWaiters(err);
       return;
     }
     remaining -= 1;
@@ -949,6 +1014,7 @@ var ensureTransferPool = function(callback) {
       poolBuilding = false;
       transferPoolReady = transferPool.length > 0;
       callback();
+      flushPoolBuildWaiters();
     }
   };
 
@@ -1231,28 +1297,56 @@ var executeSyncRemote = function(sync, options, callback) {
   if (onSyncProgress != null) onSyncProgress(syncProgressDone, syncProgressTotal);
 
   if (sync.dirsToAdd.length > 0) {
-    var dirToAdd = sync.dirsToAdd.shift();
-    var remotePath = upath.toUnix(path.join(options.remotePath, dirToAdd));
+    var dirs = sync.dirsToAdd.slice();
+    sync.dirsToAdd = [];
 
-    output(
-      getCurrentTime() + " > [ftp-sync] syncRemote createDir: " + dirToAdd
-    );
+    ensureTransferPool(function(err) {
+      if (err) {
+        callback(err);
+        return;
+      }
 
-    ftp.mkdir(
-      remotePath,
-      function(err) {
-        if (isCancelled()) {
-          callback(makeCancelledError());
-          return;
-        }
-        if (err) callback(err);
-        else {
-          syncProgressDone += 1;
+      var limit = transferPool ? transferPool.length : 1;
+      var rr = 0;
+
+      runLimited(
+        dirs,
+        limit,
+        function(dirToAdd, done) {
+          var remotePath = upath.toUnix(path.join(options.remotePath, dirToAdd));
+          output(
+            getCurrentTime() + " > [ftp-sync] syncRemote createDir: " + dirToAdd
+          );
+          runTransferWithRetry(
+            "mkdir " + dirToAdd,
+            function(attemptDone) {
+              var client = transferPool
+                ? transferPool[rr++ % transferPool.length]
+                : ftp;
+              client.mkdir(
+                remotePath,
+                function(err) {
+                  // Em paralelo, dois clientes podem criar o mesmo diretorio
+                  // pai ao mesmo tempo. "Ja existe" nao e falha.
+                  if (isDirAlreadyExistsError(err)) attemptDone();
+                  else attemptDone(err);
+                },
+                true
+              );
+            },
+            done
+          );
+        },
+        function(e) {
+          if (e) {
+            callback(e);
+            return;
+          }
+          syncProgressDone += dirs.length;
           executeSyncRemote(sync, options, callback);
         }
-      },
-      true
-    );
+      );
+    });
   } else if (sync.filesToAdd.length > 0 || sync.filesToUpdate.length > 0) {
     var files = sync.filesToAdd.concat(sync.filesToUpdate);
     sync.filesToAdd = [];
